@@ -1,0 +1,50 @@
+// backend/prisma/schema.prisma
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  name      String
+  email     String   @unique
+  password  String
+  role      String   @default("ADMIN")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Area {
+  id          Int      @id @default(autoincrement())
+  name        String
+  description String?
+  tables      Table[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Table {
+  id        Int      @id @default(autoincrement())
+  name      String
+  area      Area     @relation(fields: [areaId], references: [id])
+  areaId    Int
+  orders    Order[]
+  status    String   @default("AVAILABLE")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Order {
+  id        Int      @id @default(autoincrement())
+  table     Table    @relation(fields: [tableId], references: [id])
+  tableId   Int
+  items     Json
+  total     Float    @default(0)
+  status    String   @default("OPEN")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
