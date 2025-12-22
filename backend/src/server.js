@@ -15,6 +15,8 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+app.get("/", (req, res) => res.send("OK - POS backend running"));
+app.get("/api", (req, res) => res.json({ ok: true }));
 
 // Montar cada router en su path
 app.use("/api/auth", authRoutes);
