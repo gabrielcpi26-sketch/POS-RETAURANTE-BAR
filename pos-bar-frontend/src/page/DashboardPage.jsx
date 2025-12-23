@@ -1159,21 +1159,28 @@ const payload = {
   total: Number(total.toFixed(2)),
 };
 
-    const res = await fetch(`${API_URL}/api/orders`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+const res = await fetch(`${API_URL}/api/orders`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(payload),
+});
 
-    if (!res.ok) {
-      throw new Error("No se pudo guardar el pedido");
-    }
+if (!res.ok) {
+  throw new Error("No se pudo guardar el pedido");
+}
 
-    alert(
-      `✅ Pedido guardado\nMesa: ${selectedTable.name}\nTotal: ${fmtMoney(
-        total
-      )}`
-    );
+alert(
+  `✅ Pedido guardado\nMesa: ${selectedTable.name}\nTotal: ${fmtMoney(
+    total
+  )}`
+);
+
+// 🔁 REFRESCOS (NO rompen lógica existente)
+await loadInventoryOptions();   // stock / menú rápido
+await loadRecentOrders();       // pedidos en tiempo real (ventas)
+await loadDailyReports?.();     // resumen / gráficas (si existe)
+
+
 setOpenTableIds((prev) => {
   const next = new Set(prev);
   next.add(selectedTable.id);

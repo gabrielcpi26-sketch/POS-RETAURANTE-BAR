@@ -429,15 +429,16 @@ function abrirTurnoGlobal() {
   const [inventoryOptions, setInventoryOptions] = useState([]);
   async function loadInventoryOptions() {
     try {
-      const res = await fetch(`${API_URL}/api/orders/debug/inventory-items`, {
+      const res = await fetch(`${API_URL}/api/inventory/summary`, {
 
         cache: "no-store",
       });
       if (!res.ok) return;
 await loadInventoryOptions();   // ✅ actualiza botones del menú rápido
 
-      const data = await res.json();
-      setInventoryOptions(Array.isArray(data) ? data : []);
+const data = await res.json();
+setInventoryOptions(Array.isArray(data?.items) ? data.items : []);
+
     } catch (err) {
       console.error("Error cargando inventario:", err);
     }
@@ -1322,10 +1323,10 @@ const loadRecentOrders = async ({ silent = false } = {}) => {
     try {
       setLoadingLowStock(true);
       setLowStockError("");
-      const res = await fetch(`${API_URL}/api/orders/debug/inventory-items`, { cache: "no-store" });
+      const res = await fetch(`${API_URL}/api/inventory/summary`, { cache: "no-store" });
       if (!res.ok) throw new Error("No se pudo cargar inventario");
       const data = await res.json();
-      const list = Array.isArray(data) ? data : [];
+const list = Array.isArray(data?.items) ? data.items : [];
 setInventoryOptions(list); // ✅ refresca inventario real para el menú rápido
 
 
