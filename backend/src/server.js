@@ -12,50 +12,39 @@ const inventoryRoutes = require("./routes/inventory.routes");
 
 const app = express();
 
-// CORS (IMPORTANTE: permitir Vercel + Render + localhost)
+// ✅ CORS: permitir localhost + Render + Vercel (prod y previews)
+const ALLOWED_ORIGINS = [
+  "http://localhost:5173",
+  "https://pos-restaurante-bar.vercel.app",
+  "https://pos-restaurante-bar-git-main-gabrielcpi26-sketchs-projects.vercel.app",
+  "https://pos-retaurante-bar.vercel.app",
+  "https://pos-retaurante-bar-git-main-gabrielcpi26-sketchs-projects.vercel.app",
+  "https://pos-retaurante-bar.onrender.com",
+  "https://pos-restaurante-bar.onrender.com",
+];
+
 app.use(
   cors({
     origin: (origin, cb) => {
-      // Permite llamadas sin origin (Postman, server-to-server)
+      // Permite requests sin origin (Postman, server-to-server)
       if (!origin) return cb(null, true);
-
-      const allowed = [
-        "http://localhost:5173",
-        "https://pos-restaurante-bar.vercel.app",
-        "https://pos-restaurante-bar.onrender.com",
-      ];
-
-      // Permite previews de Vercel también (opcional pero útil)
-      if (allowed.includes(origin) || origin.endsWith(".vercel.app")) {
-        return cb(null, true);
-      }
-
-      return cb(new Error("Not allowed by CORS: " + origin));
+      if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+      return cb(new Error(`CORS blocked: ${origin}`));
     },
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
+    optionsSuccessStatus: 200,
   })
 );
-
-// Por si el navegador manda preflight
-app.options("*", cors());
 
 app.use(express.json());
 
 // Health checks
-app.get("/", (req, res) => {
-  res.send("OK - POS backend running");
-});
+app.get("/", (req, res) => res.send("OK - POS backend running"));
+app.get("/api", (req, res) => res.json({ ok: true }));
+app.get("/__ping", (req, res) => res.json({ ok: true }));
 
-app.get("/api", (req, res) => {
-  res.json({ ok: true });
-});
-
-app.get("/__ping", (req, res) => {
-  res.json({ ok: true });
-});
-
-// Montar routers (SIN duplicados)
+// Rutas API
 app.use("/api/auth", authRoutes);
 app.use("/api/areas", areasRoutes);
 app.use("/api/tables", tablesRoutes);
