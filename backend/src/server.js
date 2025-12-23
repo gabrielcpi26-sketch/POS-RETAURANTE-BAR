@@ -12,20 +12,37 @@ const inventoryRoutes = require("./routes/inventory.routes");
 
 const app = express();
 
+// CORS (IMPORTANTE: permitir Vercel + Render + localhost)
 app.use(
   cors({
-    origin: [
-      "http://localhost:5173",
-      "https://pos-restaurante-bar.onrender.com",
-    ],
+    origin: (origin, cb) => {
+      // Permite llamadas sin origin (Postman, server-to-server)
+      if (!origin) return cb(null, true);
+
+      const allowed = [
+        "http://localhost:5173",
+        "https://pos-restaurante-bar.vercel.app",
+        "https://pos-restaurante-bar.onrender.com",
+      ];
+
+      // Permite previews de Vercel también (opcional pero útil)
+      if (allowed.includes(origin) || origin.endsWith(".vercel.app")) {
+        return cb(null, true);
+      }
+
+      return cb(new Error("Not allowed by CORS: " + origin));
+    },
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 
+// Por si el navegador manda preflight
+app.options("*", cors());
+
 app.use(express.json());
 
-// Rutas base (health check)
+// Health checks
 app.get("/", (req, res) => {
   res.send("OK - POS backend running");
 });
@@ -38,16 +55,13 @@ app.get("/__ping", (req, res) => {
   res.json({ ok: true });
 });
 
-// Montar cada router en su path
+// Montar routers (SIN duplicados)
 app.use("/api/auth", authRoutes);
 app.use("/api/areas", areasRoutes);
 app.use("/api/tables", tablesRoutes);
-app.use("/api/reports", reportsRoutes);
 app.use("/api/orders", ordersRoutes);
+app.use("/api/reports", reportsRoutes);
 app.use("/api/inventory", inventoryRoutes);
-app.use("/api/orders", require("./routes/orders.routes"));
-app.use("/api/reports", require("./routes/reports.routes")); // <-- DEBE existir
-
 
 // Puerto
 const PORT = process.env.PORT || 4000;
