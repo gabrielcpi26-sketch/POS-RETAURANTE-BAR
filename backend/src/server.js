@@ -16,17 +16,8 @@ app.use(
   cors({
     origin: [
       "http://localhost:5173",
-      "http://localhost:3000",
-
-      // ✅ Frontend en Vercel (tu dominio real)
-      "https://pos-retaurante-bar.vercel.app",
-
-      // (Opcional) si también usas el .app
-      "https://pos-retaurante-bar.vercel.app",
-      "https://pos-retaurante-bar.vercel.app",
-
-      // tu backend (no estorba, pero NO es el importante)
-      "https://pos-restaurante-bar.onrender.com",
+      "https://pos-retaurante-bar.vercel.app",          // ✅ Vercel PROD
+      "https://pos-retaurante-bar.onrender.com",       // ✅ Backend (por si abres front ahí)
     ],
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
@@ -35,12 +26,12 @@ app.use(
 
 app.use(express.json());
 
-// Health
+// Health checks
 app.get("/", (req, res) => res.send("OK - POS backend running"));
 app.get("/api", (req, res) => res.json({ ok: true }));
 app.get("/__ping", (req, res) => res.json({ ok: true }));
 
-// Rutas
+// Routers
 app.use("/api/auth", authRoutes);
 app.use("/api/areas", areasRoutes);
 app.use("/api/tables", tablesRoutes);
