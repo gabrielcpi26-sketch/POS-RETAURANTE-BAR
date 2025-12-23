@@ -22,7 +22,7 @@ app.use(
         origin === "http://localhost:5173" ||
         origin === "https://pos-retaurante-bar.vercel.app" ||
         origin.endsWith(".vercel.app") || // ✅ cualquier preview/prod de Vercel
-        origin === "https://pos-restaurante-bar.onrender.com"; // opcional
+        origin === "https://pos-retaurante-bar.onrender.com"; // opcional
 
       return allow ? callback(null, true) : callback(new Error("Not allowed by CORS"));
     },
