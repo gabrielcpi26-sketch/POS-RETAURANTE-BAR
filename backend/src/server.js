@@ -25,13 +25,18 @@ app.use(
 
 app.use(express.json());
 
-app.get("/", (req, res) => res.send("OK - POS backend running"));
-app.get("/__ping", (req, res) =>
-  res.json({ ok: true, from: "backend/src/server.js" })
-);
-app.get("/api", (req, res) => res.json({ ok: true }));
-app.get("/__ping", (req, res) => res.json({ ok: true, from: "server.js", time: new Date().toISOString() }));
+// Rutas base (health check)
+app.get("/", (req, res) => {
+  res.send("OK - POS backend running");
+});
 
+app.get("/api", (req, res) => {
+  res.json({ ok: true });
+});
+
+app.get("/__ping", (req, res) => {
+  res.json({ ok: true });
+});
 
 // Montar cada router en su path
 app.use("/api/auth", authRoutes);
