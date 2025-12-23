@@ -14,15 +14,23 @@ const app = express();
 
 app.use(
   cors({
-    origin: [
-      "http://localhost:5173",
-      "https://pos-retaurante-bar.vercel.app",          // ✅ Vercel PROD
-      "https://pos-retaurante-bar.onrender.com",       // ✅ Backend (por si abres front ahí)
-    ],
+    origin: function (origin, callback) {
+      // requests sin origin (curl/postman) => permitir
+      if (!origin) return callback(null, true);
+
+      const allow =
+        origin === "http://localhost:5173" ||
+        origin === "https://pos-retaurante-bar.vercel.app" ||
+        origin.endsWith(".vercel.app") || // ✅ cualquier preview/prod de Vercel
+        origin === "https://pos-restaurante-bar.onrender.com"; // opcional
+
+      return allow ? callback(null, true) : callback(new Error("Not allowed by CORS"));
+    },
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
+
 
 app.use(express.json());
 
