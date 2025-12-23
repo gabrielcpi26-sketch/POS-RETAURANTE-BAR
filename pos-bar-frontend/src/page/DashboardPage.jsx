@@ -31,7 +31,7 @@ ChartJS.register(BarElement, CategoryScale, LinearScale, Tooltip, Legend, ArcEle
 // =======================
 // CONFIG
 // =======================
-const API_URL = import.meta.env?.VITE_API_URL || "http://localhost:4000";
+const API_URL = import.meta.env.VITE_API_URL;
 
 // Para que otros componentes puedan refrescar inventario (si lo usas)
 window.dispatchInventoryRefresh = () => {
@@ -1227,10 +1227,10 @@ const handleLoadAdminSummary = async ({ silent = false } = {}) => {
 const raw = localStorage.getItem(SHIFT_BASELINE_KEY(todayKey));
 const baseline = raw ? JSON.parse(raw) : { sales: 0, orders: 0 };
 
-    const BASE_URL =
-      typeof API_URL !== "undefined" && API_URL
-        ? API_URL
-        : "http://localhost:4000";
+   const BASE_URL =
+  typeof API_URL !== "undefined" && API_URL
+    ? API_URL
+    : "";
 
     const res = await fetch(
       `${BASE_URL}/api/orders/admin/summary-today`,
@@ -1291,7 +1291,8 @@ const loadRecentOrders = async ({ silent = false } = {}) => {
       setLoadingOrders(true);
       setOrdersError("");
     }
-    const BASE_URL = (typeof API_URL !== "undefined" && API_URL) ? API_URL : "http://localhost:4000";
+    const BASE_URL = (typeof API_URL !== "undefined" && API_URL) ? API_URL : "";
+
     const res = await fetch(`${BASE_URL}/api/orders`, { cache: "no-store" });
     if (!res.ok) throw new Error("No se pudo cargar el historial");
     const data = await res.json();
@@ -1737,7 +1738,10 @@ try {
 
   try {
     // 1) Traer resumen real DEL DÍA (antes del corte)
-    const res = await fetch("http://localhost:4000/api/orders/admin/summary");
+   const res = await fetch(
+  `${import.meta.env.VITE_API_URL}/api/orders/admin/summary`
+);
+
     if (!res.ok) throw new Error("No se pudo leer resumen para cierre");
 
     const data = await res.json();
@@ -1760,9 +1764,13 @@ try {
     setCashCount("");
 
     // 4) (Opcional) endpoint de cierre
-    try {
-      await fetch("http://localhost:4000/api/orders/close-day", { method: "POST" });
-    } catch {}
+try {
+  await fetch(
+    `${import.meta.env.VITE_API_URL}/api/orders/close-day`,
+    { method: "POST" }
+  );
+} catch {}
+
 
     // 5) Refrescar resumen (ya debe dar 0/0 por baseline)
     await handleLoadAdminSummary();

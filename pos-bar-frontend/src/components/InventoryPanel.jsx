@@ -65,9 +65,9 @@ export default function InventoryPanel() {
       setLoading(true);
       setError("");
 
-      const res = await fetch(
-        "http://localhost:4000/api/orders/debug/inventory-items"
-      );
+     const res = await fetch(
+  `${import.meta.env.VITE_API_URL}/api/orders/debug/inventory-items`
+);
       if (!res.ok) {
         throw new Error("No se pudo cargar el inventario");
       }
@@ -94,11 +94,14 @@ export default function InventoryPanel() {
       setLoading(true);
       setError("");
 
-      const res = await fetch(`http://localhost:4000/api/inventory/${itemId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: editingName.trim() }),
-      });
+      const res = await fetch(
+  `${import.meta.env.VITE_API_URL}/api/inventory/${itemId}`,
+  {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: editingName.trim() }),
+  }
+);
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -149,11 +152,15 @@ export default function InventoryPanel() {
     try {
       setLoading(true);
       setError("");
-      const res = await fetch("http://localhost:4000/api/inventory/movements", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(movementForm),
-      });
+    const res = await fetch(
+  `${import.meta.env.VITE_API_URL}/api/inventory/movements`,
+  {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(movementForm),
+  }
+);
+
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || "No se pudo registrar el movimiento");
@@ -188,15 +195,18 @@ export default function InventoryPanel() {
       setLoading(true);
       setError("");
 
-      const res = await fetch("http://localhost:4000/api/inventory/items", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name,
-          unit: newItemForm.unit || "pz",
-          sku: newItemForm.sku ? String(newItemForm.sku).trim() : null,
-        }),
-      });
+      const res = await fetch(
+  `${import.meta.env.VITE_API_URL}/api/inventory/items`,
+  {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name,
+      unit: newItemForm.unit || "pz",
+      sku: newItemForm.sku ? String(newItemForm.sku).trim() : null,
+    }),
+  }
+);
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -295,8 +305,8 @@ export default function InventoryPanel() {
       if (to) params.append("to", to);
 
       const res = await fetch(
-        `http://localhost:4000/api/inventory/report?${params.toString()}`
-      );
+  `${import.meta.env.VITE_API_URL}/api/inventory/report?${params.toString()}`
+);
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || "No se pudo obtener el reporte");
