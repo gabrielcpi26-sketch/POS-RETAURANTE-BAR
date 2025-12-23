@@ -12,27 +12,22 @@ const inventoryRoutes = require("./routes/inventory.routes");
 
 const app = express();
 
-const ALLOWED_ORIGINS = [
-  "http://localhost:5173",
-  "https://pos-restaurante-bar.onrender.com", // (si alguna vez abres frontend ahí)
-  "https://pos-restaurante-bar.vercel.app",
-  "https://pos-restaurante-bar-git-main-gabrielcpi26-sketchs-projects.vercel.app",
-];
-
 app.use(
   cors({
-    origin: (origin, cb) => {
-      // Permite herramientas sin origin (Postman, curl, healthchecks)
-      if (!origin) return cb(null, true);
+    origin: [
+      "http://localhost:5173",
+      "http://localhost:3000",
 
-      // Permite lista fija
-      if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+      // ✅ Frontend en Vercel (tu dominio real)
+      "https://pos-retaurante-bar.vercel.app",
 
-      // Permite cualquier preview de Vercel (*.vercel.app)
-      if (/^https:\/\/.*\.vercel\.app$/.test(origin)) return cb(null, true);
+      // (Opcional) si también usas el .app
+      "https://pos-retaurante-bar.vercel.app",
+      "https://pos-retaurante-bar.vercel.app",
 
-      return cb(new Error(`CORS blocked for origin: ${origin}`), false);
-    },
+      // tu backend (no estorba, pero NO es el importante)
+      "https://pos-restaurante-bar.onrender.com",
+    ],
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
   })
@@ -40,7 +35,7 @@ app.use(
 
 app.use(express.json());
 
-// Health checks
+// Health
 app.get("/", (req, res) => res.send("OK - POS backend running"));
 app.get("/api", (req, res) => res.json({ ok: true }));
 app.get("/__ping", (req, res) => res.json({ ok: true }));
@@ -49,8 +44,8 @@ app.get("/__ping", (req, res) => res.json({ ok: true }));
 app.use("/api/auth", authRoutes);
 app.use("/api/areas", areasRoutes);
 app.use("/api/tables", tablesRoutes);
-app.use("/api/reports", reportsRoutes);
 app.use("/api/orders", ordersRoutes);
+app.use("/api/reports", reportsRoutes);
 app.use("/api/inventory", inventoryRoutes);
 
 // Puerto

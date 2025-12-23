@@ -1,12 +1,12 @@
 // src/api/axios.js
 import axios from "axios";
 
-const baseURL =
-  import.meta.env.VITE_API_URL
-    ? `${import.meta.env.VITE_API_URL}/api`
-    : "http://localhost:4000/api";
+const API_BASE =
+  import.meta.env.VITE_API_URL?.replace(/\/$/, "") || "http://localhost:4000";
 
-const api = axios.create({ baseURL });
+const api = axios.create({
+  baseURL: `${API_BASE}/api`,
+});
 
 // Interceptor para agregar token automáticamente
 api.interceptors.request.use((config) => {
@@ -16,4 +16,3 @@ api.interceptors.request.use((config) => {
 });
 
 export default api;
-
