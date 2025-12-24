@@ -31,7 +31,12 @@ ChartJS.register(BarElement, CategoryScale, LinearScale, Tooltip, Legend, ArcEle
 // =======================
 // CONFIG
 // =======================
-const API_URL = (import.meta.env.VITE_API_URL || "http://localhost:4000").replace(/\/$/, "");
+const API_URL = (import.meta.env.VITE_API_URL
+  || (typeof window !== "undefined" && window.location.hostname.includes("vercel.app")
+      ? "https://pos-retaurante-bar.onrender.com"
+      : "http://localhost:4000"
+    )
+).replace(/\/$/, "");
 
 
 // Para que otros componentes puedan refrescar inventario (si lo usas)
