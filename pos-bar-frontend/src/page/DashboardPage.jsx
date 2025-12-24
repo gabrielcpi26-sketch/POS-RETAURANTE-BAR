@@ -29,8 +29,9 @@ ChartJS.register(BarElement, CategoryScale, LinearScale, Tooltip, Legend, ArcEle
 
 
 // =======================
-// CONFIG (API_URL PRO)
+// CONFIG
 // =======================
+
 const API_URL = (() => {
   // 1) Lee env y límpialo (quita espacios y / final)
   const raw = String(import.meta?.env?.VITE_API_URL || "").trim();
@@ -448,7 +449,10 @@ function abrirTurnoGlobal() {
   const [inventoryOptions, setInventoryOptions] = useState([]);
   async function loadInventoryOptions() {
     try {
-      const res = await fetch(`${API_URL}/api/orders/debug/inventory-items`, {cache: "no-store",});
+      const res = await fetch(`${API_URL}/api/orders/debug/inventory-items`, {
+
+        cache: "no-store",
+      });
       if (!res.ok) return;
 await loadInventoryOptions();   // ✅ actualiza botones del menú rápido
 
