@@ -31,8 +31,7 @@ ChartJS.register(BarElement, CategoryScale, LinearScale, Tooltip, Legend, ArcEle
 // =======================
 // CONFIG
 // =======================
-const API_URL = import.meta.env.VITE_API_URL;
-
+const API_URL = import.meta.env.VITE_API_URL;const API_URL = String(import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 
 // Para que otros componentes puedan refrescar inventario (si lo usas)
 window.dispatchInventoryRefresh = () => {
@@ -435,6 +434,7 @@ function abrirTurnoGlobal() {
         cache: "no-store",
       });
       if (!res.ok) return;
+await loadInventoryOptions();   // ✅ actualiza botones del menú rápido
 
       const data = await res.json();
       setInventoryOptions(Array.isArray(data) ? data : []);
