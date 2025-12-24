@@ -31,11 +31,11 @@ ChartJS.register(BarElement, CategoryScale, LinearScale, Tooltip, Legend, ArcEle
 // =======================
 // CONFIG
 // =======================
-const API_URL = (import.meta.env.VITE_API_URL
-  || (typeof window !== "undefined" && window.location.hostname.includes("vercel.app")
-      ? "https://pos-retaurante-bar.onrender.com"
-      : "http://localhost:4000"
-    )
+const API_URL = (
+  import.meta.env.VITE_API_URL ||
+  (typeof window !== "undefined" && window.location.hostname === "localhost"
+    ? "http://localhost:4000"
+    : "https://pos-retaurante-bar.onrender.com")
 ).replace(/\/$/, "");
 
 
