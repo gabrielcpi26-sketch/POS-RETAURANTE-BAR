@@ -435,7 +435,6 @@ function abrirTurnoGlobal() {
         cache: "no-store",
       });
       if (!res.ok) return;
-await loadInventoryOptions();   // ✅ actualiza botones del menú rápido
 
       const data = await res.json();
       setInventoryOptions(Array.isArray(data) ? data : []);
