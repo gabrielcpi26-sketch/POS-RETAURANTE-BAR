@@ -29,29 +29,20 @@ ChartJS.register(BarElement, CategoryScale, LinearScale, Tooltip, Legend, ArcEle
 
 
 // =======================
+// =========================
 // CONFIG
-// =======================
+// =========================
 
-const API_URL = (() => {
-  // 1) Lee env y límpialo (quita espacios y / final)
-  const raw = String(import.meta?.env?.VITE_API_URL || "").trim();
-  const envUrl = raw.replace(/\/$/, "");
+// ⚠️ REGLA PRO:
+// - El frontend NUNCA decide localhost vs prod
+// - TODO se controla por Vercel ENV (VITE_API_URL)
+// - Si no existe, falla explícitamente (mejor que romper en silencio)
 
-  // 2) Detecta host real del browser
-  const host =
-    typeof globalThis !== "undefined" && globalThis.location
-      ? globalThis.location.hostname
-      : "";
+const API_URL = String(import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 
-  const isLocal =
-    host === "localhost" || host === "127.0.0.1" || host.endsWith(".local");
-
-  // 3) Regla de oro:
-  // - Si estoy en local => localhost
-  // - Si NO estoy en local => SIEMPRE usa envUrl si existe, si no existe usa Render
-  if (isLocal) return envUrl || "http://localhost:4000";
-  return envUrl || "https://pos-retaurante-bar.onrender.com";
-})();
+if (!API_URL) {
+  console.error("❌ VITE_API_URL no está definida en el entorno");
+}
 
 // Para que otros componentes puedan refrescar inventario (si lo usas)
 window.dispatchInventoryRefresh = () => {
