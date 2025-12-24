@@ -29,9 +29,28 @@ ChartJS.register(BarElement, CategoryScale, LinearScale, Tooltip, Legend, ArcEle
 
 
 // =======================
-// CONFIG
+// CONFIG (API_URL PRO)
 // =======================
-const API_URL = import.meta.env.VITE_API_URL;const API_URL = String(import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+const API_URL = (() => {
+  // 1) Lee env y límpialo (quita espacios y / final)
+  const raw = String(import.meta?.env?.VITE_API_URL || "").trim();
+  const envUrl = raw.replace(/\/$/, "");
+
+  // 2) Detecta host real del browser
+  const host =
+    typeof globalThis !== "undefined" && globalThis.location
+      ? globalThis.location.hostname
+      : "";
+
+  const isLocal =
+    host === "localhost" || host === "127.0.0.1" || host.endsWith(".local");
+
+  // 3) Regla de oro:
+  // - Si estoy en local => localhost
+  // - Si NO estoy en local => SIEMPRE usa envUrl si existe, si no existe usa Render
+  if (isLocal) return envUrl || "http://localhost:4000";
+  return envUrl || "https://pos-retaurante-bar.onrender.com";
+})();
 
 // Para que otros componentes puedan refrescar inventario (si lo usas)
 window.dispatchInventoryRefresh = () => {
@@ -429,10 +448,7 @@ function abrirTurnoGlobal() {
   const [inventoryOptions, setInventoryOptions] = useState([]);
   async function loadInventoryOptions() {
     try {
-      const res = await fetch(`${API_URL}/api/orders/debug/inventory-items`, {
-
-        cache: "no-store",
-      });
+      const res = await fetch(`${API_URL}/api/orders/debug/inventory-items`, {cache: "no-store",});
       if (!res.ok) return;
 await loadInventoryOptions();   // ✅ actualiza botones del menú rápido
 
