@@ -31,12 +31,11 @@ ChartJS.register(BarElement, CategoryScale, LinearScale, Tooltip, Legend, ArcEle
 // =======================
 // CONFIG
 // =======================
-const API_URL = (
-  import.meta.env.VITE_API_URL ||
+const API_URL =
   (typeof window !== "undefined" && window.location.hostname === "localhost"
     ? "http://localhost:4000"
-    : "https://pos-retaurante-bar.onrender.com")
-).replace(/\/$/, "");
+    : (import.meta.env.VITE_API_URL || "https://pos-retaurante-bar.onrender.com")
+  ).replace(/\/$/, "");
 
 
 // Para que otros componentes puedan refrescar inventario (si lo usas)
