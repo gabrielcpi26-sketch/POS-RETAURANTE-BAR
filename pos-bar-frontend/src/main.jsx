@@ -10,16 +10,16 @@ ReactDOM.createRoot(document.getElementById("root")).render(
 );
 
 /**
- * 🔴 IMPORTANTE
- * Se DESACTIVA el Service Worker para evitar:
- * - Cache viejo
- * - Requests hardcodeados a localhost:4000
- * - Fetch inyectados desde bundles antiguos
- *
- * (Esto NO afecta tu lógica de negocio)
+ * IMPORTANTE:
+ * - Service Worker puede cachear un build viejo y seguir sirviendo URLs como http://localhost:4000
+ * - Por ahora lo desactivamos para evitar que Vercel se “quede pegado” con archivos antiguos.
+ * - Si después quieres PWA, lo reactivamos bien con versión y estrategia correcta.
  */
-if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.getRegistrations().then((regs) => {
-    regs.forEach((reg) => reg.unregister());
-  });
-}
+
+// if ("serviceWorker" in navigator) {
+//   window.addEventListener("load", () => {
+//     navigator.serviceWorker
+//       .register("/sw.js")
+//       .catch((err) => console.error("SW error:", err));
+//   });
+// }
