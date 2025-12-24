@@ -31,7 +31,7 @@ ChartJS.register(BarElement, CategoryScale, LinearScale, Tooltip, Legend, ArcEle
 // =======================
 // CONFIG
 // =======================
-const API_URL = import.meta.env.VITE_API_URL.replace(/\/$/, "");
+const API_URL = import.meta.env.VITE_API_URL;
 
 
 // Para que otros componentes puedan refrescar inventario (si lo usas)
