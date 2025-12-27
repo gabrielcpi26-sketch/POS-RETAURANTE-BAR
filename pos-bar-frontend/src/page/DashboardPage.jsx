@@ -1116,17 +1116,14 @@ const [savingOrder, setSavingOrder] = useState(false);
 const [paymentMethod, setPaymentMethod] = useState("CASH"); // CASH | CARD | TRANSFER
 const [paymentRef, setPaymentRef] = useState("");
 
-
-
 const handleSaveOrder = async () => {
   // ⛔ BLOQUEO DURO POS (evita doble ejecución)
   if (savingOrder) return;
 
-if (!isTurnoAbierto()) {
-  alert("⛔ Primero abre el turno para empezar el día.");
-  return;
-}
-
+  if (!isTurnoAbierto()) {
+    alert("⛔ Primero abre el turno para empezar el día.");
+    return;
+  }
 
   if (!selectedTable) return alert("Selecciona primero una mesa.");
   if (!currentOrder.items || currentOrder.items.length === 0)
@@ -1144,10 +1141,7 @@ if (!isTurnoAbierto()) {
         expandedItems.push({
           productId: item.productId,
           name: promo.inventoryName,
-          price:
-            promo.units > 0
-              ? Number(item.price) / promo.units
-              : Number(item.price),
+          price: promo.units > 0 ? Number(item.price) / promo.units : Number(item.price),
           qty: Number(item.qty) * promo.units,
           inventoryItemId: item.inventoryItemId ?? null,
           menuRecipeId: item.menuRecipeId ?? null,
@@ -1164,53 +1158,62 @@ if (!isTurnoAbierto()) {
       }
     });
 
-const payload = {
-  tableId: selectedTable.id,
-  items: expandedItems,
-  total: Number(total.toFixed(2)),
-};
+    const payload = {
+      tableId: selectedTable.id,
+      items: expandedItems,
+      total: Number(total.toFixed(2)),
+    };
 
-const res = await fetch(`${API_URL}/api/orders`, {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify(payload),
-});
+   // ✅ POST con timeout + error real (NO cambia lógica)
+const controller = new AbortController();
+const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s
 
-if (!res.ok) {
-  throw new Error("No se pudo guardar el pedido");
+let res;
+try {
+  res = await fetch(`${API_URL}/api/orders`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    signal: controller.signal,
+  });
+} finally {
+  clearTimeout(timeoutId);
 }
 
-alert(
-  `✅ Pedido guardado\nMesa: ${selectedTable.name}\nTotal: ${fmtMoney(
-    total
-  )}`
-);
-
-// 🔁 REFRESCOS (NO rompen lógica existente)
-await loadInventoryOptions();   // stock / menú rápido
-await loadRecentOrders();       // pedidos en tiempo real (ventas)
-await loadDailyReports?.();     // resumen / gráficas (si existe)
+if (!res.ok) {
+  const detail = await res.text().catch(() => "");
+  console.error("❌ /api/orders error:", res.status, detail);
+  throw new Error(detail || "No se pudo guardar el pedido");
+}
 
 
-setOpenTableIds((prev) => {
-  const next = new Set(prev);
-  next.add(selectedTable.id);
-  return next;
-});
+    alert(
+      `✅ Pedido guardado\nMesa: ${selectedTable.name}\nTotal: ${fmtMoney(total)}`
+    );
 
+    // ✅ Limpieza de UI INMEDIATA (no depende de refreshes)
+    setOpenTableIds((prev) => {
+      const next = new Set(prev);
+      next.add(selectedTable.id);
+      return next;
+    });
 
     setOrdersByTable((prev) => ({
       ...prev,
       [selectedTable.id]: { items: [] },
     }));
 
-setPaymentRef("");
-setPaymentMethod("CASH");
+    setPaymentRef("");
+    setPaymentMethod("CASH");
 
-Promise.allSettled([
-  loadInventoryOptions(),
-  loadLowStock?.(),
-]);
+    // 🔁 REFRESCOS (NO BLOQUEAN el guardado)
+    Promise.allSettled([
+      loadInventoryOptions(),
+      loadRecentOrders(),
+      loadDailyReports?.(),
+      loadLowStock?.(),
+    ]);
+
   } catch (err) {
     console.error(err);
     alert("❌ Error al guardar el pedido. Revisa tu backend.");
@@ -1219,11 +1222,9 @@ Promise.allSettled([
   }
 };
 
-
 const handlePrintQR = () => {
   window.print();
 };
-
 
 
 // =======================
@@ -3110,9 +3111,10 @@ setOpenTableIds((prev) => {
                           backgroundColor: "rgba(15,23,42,0.98)",
                         }}
                       >
-                        {currentOrder.items.map((item) => (
-                          <div
-                            key={item.productId}
+                       {currentOrder.items.map((item, idx) => (
+  <div
+    key={`${item.productId ?? item.name ?? "item"}-${idx}`}
+
                             style={{
                               display: "flex",
                               alignItems: "center",
@@ -3586,119 +3588,97 @@ boxShadow: noStock ? "none" : `0 0 0 1px ${catColor}40`,
                 }}
               />
 
-              {/* FOTO (compacta) */}
-              <div style={{ display: "flex", gap: 10, alignItems: "center", minWidth: 0 }}>
-                <div
-                 style={{
-  width: "100%",
-  aspectRatio: "1 / 1",
-  borderTopLeftRadius: 14,
-  borderTopRightRadius: 14,
-  overflow: "hidden",
-  borderBottom: "1px solid rgba(148,163,184,0.20)",
-  background: "rgba(2,6,23,0.25)",
-}}
-                  title="Foto del producto"
-                >
-                  {p.imageData || p.imageUrl ? (
-                    <img
-                      src={p.imageData || p.imageUrl}
-                      alt=""
-                      style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                    />
-                  ) : (
-                    <span style={{ fontSize: 10, opacity: 0.7, fontWeight: 900 }}>IMG</span>
-                  )}
-                </div>
+              {/* FOTO (compacta) - en edición NO se muestra preview para que no ocupe espacio */}
+<div style={{ display: "flex", gap: 10, alignItems: "center", minWidth: 0 }}>
+  <details style={{ minWidth: 0, width: "100%" }}>
+    <summary
+      style={{
+        cursor: "pointer",
+        fontSize: 11,
+        fontWeight: 900,
+        opacity: 0.9,
+        listStyle: "none",
+        userSelect: "none",
+        padding: "8px 10px",
+        borderRadius: 999,
+        border: "1px solid rgba(148,163,184,0.35)",
+        background: "rgba(2,6,23,0.28)",
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+      }}
+    >
+      Foto <span style={{ fontSize: 10, opacity: 0.65 }}>(URL o subir)</span>
+    </summary>
 
-                <details style={{ minWidth: 0, width: "100%" }}>
-                  <summary
-                    style={{
-                      cursor: "pointer",
-                      fontSize: 11,
-                      fontWeight: 900,
-                      opacity: 0.9,
-                      listStyle: "none",
-                      userSelect: "none",
-                      padding: "8px 10px",
-                      borderRadius: 999,
-                      border: "1px solid rgba(148,163,184,0.35)",
-                      background: "rgba(2,6,23,0.28)",
-                      whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                    }}
-                  >
-                    Foto <span style={{ fontSize: 10, opacity: 0.65 }}>(URL o subir)</span>
-                  </summary>
+    <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+      <input
+        value={p.imageUrl || ""}
+        placeholder="Pega URL (https://...)"
+        onChange={(e) => handleMenuFieldChange(p.id, "imageUrl", e.target.value)}
+        style={{
+          width: "100%",
+          minWidth: 0,
+          padding: "8px 10px",
+          borderRadius: 12,
+          border: "1px solid rgba(75,85,99,0.9)",
+          backgroundColor: "rgba(15,23,42,0.96)",
+          color: "var(--pos-text, #e5e7eb)",
+          fontSize: 11,
+        }}
+      />
 
-                  <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
-                    <input
-                      value={p.imageUrl || ""}
-                      placeholder="Pega URL (https://...)"
-                      onChange={(e) => handleMenuFieldChange(p.id, "imageUrl", e.target.value)}
-                      style={{
-                        width: "100%",
-                        minWidth: 0,
-                        padding: "8px 10px",
-                        borderRadius: 12,
-                        border: "1px solid rgba(75,85,99,0.9)",
-                        backgroundColor: "rgba(15,23,42,0.96)",
-                        color: "var(--pos-text, #e5e7eb)",
-                        fontSize: 11,
-                      }}
-                    />
+      <input
+        type="file"
+        accept="image/*"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = () => {
+            const dataUrl = String(reader.result || "");
+            handleMenuFieldChange(p.id, "imageData", dataUrl);
+          };
+          reader.readAsDataURL(file);
+          e.target.value = "";
+        }}
+        style={{
+          width: "100%",
+          minWidth: 0,
+          padding: "8px 10px",
+          borderRadius: 12,
+          border: "1px solid rgba(75,85,99,0.9)",
+          backgroundColor: "rgba(15,23,42,0.96)",
+          color: "var(--pos-text, #e5e7eb)",
+          fontSize: 11,
+        }}
+      />
 
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (!file) return;
-                        const reader = new FileReader();
-                        reader.onload = () => {
-                          const dataUrl = String(reader.result || "");
-                          handleMenuFieldChange(p.id, "imageData", dataUrl);
-                        };
-                        reader.readAsDataURL(file);
-                        e.target.value = "";
-                      }}
-                      style={{
-                        width: "100%",
-                        minWidth: 0,
-                        padding: "8px 10px",
-                        borderRadius: 12,
-                        border: "1px solid rgba(75,85,99,0.9)",
-                        backgroundColor: "rgba(15,23,42,0.96)",
-                        color: "var(--pos-text, #e5e7eb)",
-                        fontSize: 11,
-                      }}
-                    />
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <button
+          type="button"
+          onClick={() => {
+            handleMenuFieldChange(p.id, "imageUrl", "");
+            handleMenuFieldChange(p.id, "imageData", "");
+          }}
+          style={{
+            padding: "8px 12px",
+            borderRadius: 999,
+            border: "1px solid rgba(239,68,68,0.55)",
+            background: "rgba(239,68,68,0.10)",
+            color: "var(--pos-text, #e5e7eb)",
+            fontSize: 11,
+            fontWeight: 900,
+            cursor: "pointer",
+          }}
+        >
+          Quitar foto
+        </button>
+      </div>
+    </div>
+  </details>
+</div>
 
-                    <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          handleMenuFieldChange(p.id, "imageUrl", "");
-                          handleMenuFieldChange(p.id, "imageData", "");
-                        }}
-                        style={{
-                          padding: "8px 12px",
-                          borderRadius: 999,
-                          border: "1px solid rgba(239,68,68,0.55)",
-                          background: "rgba(239,68,68,0.10)",
-                          color: "var(--pos-text, #e5e7eb)",
-                          fontSize: 11,
-                          fontWeight: 900,
-                          cursor: "pointer",
-                        }}
-                      >
-                        Quitar foto
-                      </button>
-                    </div>
-                  </div>
-                </details>
-              </div>
 
               {/* CATEGORÍA/OPCIONES */}
               <input
