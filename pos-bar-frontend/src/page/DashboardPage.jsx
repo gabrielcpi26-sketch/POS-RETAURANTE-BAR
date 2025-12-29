@@ -445,7 +445,6 @@ function abrirTurnoGlobal() {
         cache: "no-store",
       });
       if (!res.ok) return;
-await loadInventoryOptions();   // ✅ actualiza botones del menú rápido
 
       const data = await res.json();
       setInventoryOptions(Array.isArray(data) ? data : []);
@@ -1618,7 +1617,7 @@ const buildCloseDayReport = () => {
     const id = setInterval(() => {
       loadRecentOrders({ silent: true });
       if (adminSummaryRef.current) loadAdminSummary({ silent: true });
-    }, 1500);
+    }, 30000);
     return () => clearInterval(id);
   }, []);
 
