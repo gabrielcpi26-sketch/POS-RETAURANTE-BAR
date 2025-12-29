@@ -1,6 +1,9 @@
 // src/components/InventoryPanel.jsx
 import { useEffect, useState, useMemo } from "react";
 
+const API_URL = String(import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+
+
 export default function InventoryPanel() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
