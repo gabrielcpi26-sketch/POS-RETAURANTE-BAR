@@ -1120,7 +1120,7 @@ const handleSaveOrder = async () => {
   if (savingOrder) return;
 
   if (!isTurnoAbierto()) {
-    alert("⛔ Primero abre el turno para empezar el día.");
+    alert("⛔ Pimero abre el turno para empezar el día.");
     return;
   }
 
