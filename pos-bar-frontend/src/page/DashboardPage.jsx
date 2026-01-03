@@ -725,23 +725,40 @@ const [qrTarget, setQrTarget] = useState(null);
     }
   };
 
- const handleSelectTable = async (area, table) => {
+const handleSelectTable = async (area, table) => {
   setSelectedArea(area);
   setSelectedTable(table);
+
+  setOrdersByTable((prev) => {
+    // ✅ SI YA EXISTE PEDIDO LOCAL, NO LO TOQUES
+    if (prev[table.id]?.items?.length) {
+      return prev;
+    }
+    return prev;
+  });
 
   try {
     const res = await fetch(`${API_URL}/api/orders/open/table/${table.id}`);
     if (!res.ok) return;
 
     const data = await res.json();
-    setOrdersByTable((prev) => ({
-      ...prev,
-      [table.id]: { items: data.items || [] },
-    }));
+
+    setOrdersByTable((prev) => {
+      // 🔒 PROTECCIÓN FINAL: no sobrescribir si ya hay items
+      if (prev[table.id]?.items?.length) {
+        return prev;
+      }
+
+      return {
+        ...prev,
+        [table.id]: { items: data.items || [] },
+      };
+    });
   } catch (err) {
     console.error(err);
   }
 };
+
 
 
   const isSelected = (areaId, tableId) =>
@@ -1120,7 +1137,7 @@ const handleSaveOrder = async () => {
   if (savingOrder) return;
 
   if (!isTurnoAbierto()) {
-    alert("⛔ Pimero abre el turno para empezar el día.");
+    alert("⛔ Primero abre el turno para empezar el día.");
     return;
   }
 
@@ -1197,10 +1214,6 @@ if (!res.ok) {
       return next;
     });
 
-    setOrdersByTable((prev) => ({
-      ...prev,
-      [selectedTable.id]: { items: [] },
-    }));
 
     setPaymentRef("");
     setPaymentMethod("CASH");
