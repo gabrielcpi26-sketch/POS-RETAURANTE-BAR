@@ -1769,9 +1769,7 @@ try {
 
   try {
     // 1) Traer resumen real DEL DÍA (antes del corte)
-   const res = await fetch(
-  `${import.meta.env.VITE_API_URL}/api/orders/admin/summary`
-);
+  b
 
     if (!res.ok) throw new Error("No se pudo leer resumen para cierre");
 

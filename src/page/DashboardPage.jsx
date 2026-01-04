@@ -29,9 +29,20 @@ ChartJS.register(BarElement, CategoryScale, LinearScale, Tooltip, Legend, ArcEle
 
 
 // =======================
+// =========================
 // CONFIG
-// =======================
-const API_URL = import.meta.env?.VITE_API_URL || "http://localhost:4000";
+// =========================
+
+// ⚠️ REGLA PRO:
+// - El frontend NUNCA decide localhost vs prod
+// - TODO se controla por Vercel ENV (VITE_API_URL)
+// - Si no existe, falla explícitamente (mejor que romper en silencio)
+
+const API_URL = String(import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+
+if (!API_URL) {
+  console.error("❌ VITE_API_URL no está definida en el entorno");
+}
 
 // Para que otros componentes puedan refrescar inventario (si lo usas)
 window.dispatchInventoryRefresh = () => {
@@ -303,10 +314,10 @@ const [turnoAbierto, setTurnoAbierto] = useState(
     return () => window.removeEventListener("pos_role_changed", syncRole);
   }, []);
 
-  const isAdmin = !isMeseroRoute && userRole === ROLES.ADMIN;
-  const isEncargado = !isMeseroRoute && userRole === ROLES.ENCARGADO;
-  const isMesero = isMeseroRoute ? true : userRole === ROLES.MESERO;
-  const canManage = isAdmin || isEncargado;
+const isAdmin = !isMeseroRoute && userRole === ROLES.ADMIN;
+const isEncargado = !isMeseroRoute && userRole === ROLES.ENCARGADO;
+const isMesero = isMeseroRoute ? true : userRole === ROLES.MESERO;
+const canManage = isAdmin || isEncargado;
 
   function bounceToLogin() {
     try {
@@ -429,16 +440,14 @@ function abrirTurnoGlobal() {
   const [inventoryOptions, setInventoryOptions] = useState([]);
   async function loadInventoryOptions() {
     try {
-      const res = await fetch(`${API_URL}/api/inventory/summary`, {
+      const res = await fetch(`${API_URL}/api/orders/debug/inventory-items`, {
 
         cache: "no-store",
       });
       if (!res.ok) return;
-await loadInventoryOptions();   // ✅ actualiza botones del menú rápido
 
-const data = await res.json();
-setInventoryOptions(Array.isArray(data?.items) ? data.items : []);
-
+      const data = await res.json();
+      setInventoryOptions(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error("Error cargando inventario:", err);
     }
@@ -716,23 +725,71 @@ const [qrTarget, setQrTarget] = useState(null);
     }
   };
 
- const handleSelectTable = async (area, table) => {
+const handleSelectTable = async (area, table) => {
   setSelectedArea(area);
   setSelectedTable(table);
 
+  // ✅ evita carreras si das click rápido en mesas
+  const reqId = ++selectTableReqIdRef.current;
+
   try {
     const res = await fetch(`${API_URL}/api/orders/open/table/${table.id}`);
-    if (!res.ok) return;
+
+    // si cambiaste de mesa rápido, ignora respuesta vieja
+    if (reqId !== selectTableReqIdRef.current) return;
+
+if (!res.ok) {
+  if (res.status === 404) {
+    setSavedByTable((prev) => ({
+      ...prev,
+      [table.id]: { items: [] },
+    }));
+  }
+  return;
+}
+
+
 
     const data = await res.json();
-    setOrdersByTable((prev) => ({
+    const serverItems = Array.isArray(data.items) ? data.items : [];
+const mergedMap = new Map();
+
+for (const it of serverItems) {
+  const key = `${it.productId ?? ""}__${it.name ?? ""}__${it.price ?? ""}`;
+  const prev = mergedMap.get(key);
+
+  if (prev) {
+    mergedMap.set(key, {
       ...prev,
-      [table.id]: { items: data.items || [] },
-    }));
+      qty: Number(prev.qty || 0) + Number(it.qty || 0),
+    });
+  } else {
+    mergedMap.set(key, { ...it, qty: Number(it.qty || 0) });
+  }
+}
+
+const normalizedServerItems = Array.from(mergedMap.values());
+
+
+
+
+    // ✅ lo del backend SIEMPRE va a "saved"
+  setSavedByTable((prev) => ({
+  ...prev,
+  [table.id]: { items: normalizedServerItems },
+}));
+
+
+    // ✅ pendientes se quedan como están (o vacíos si nunca agregaste)
+    // (si quieres forzar vacíos al entrar, descomenta esto)
+    // setOrdersByTable((prev) => ({ ...prev, [table.id]: { items: [] } }));
   } catch (err) {
     console.error(err);
   }
 };
+
+
+
 
 
   const isSelected = (areaId, tableId) =>
@@ -857,9 +914,42 @@ const handleCloseTable = () => {
   // PEDIDOS (local por mesa)
   // =======================
   const [ordersByTable, setOrdersByTable] = useState({});
+// ✅ lo que ya está guardado en backend por mesa
+const [savedByTable, setSavedByTable] = useState({});
 
-  const getCurrentOrder = () =>
-    selectedTable ? ordersByTable[selectedTable.id] || { items: [] } : { items: [] };
+const ordersByTableRef = useRef({});
+useEffect(() => {
+  ordersByTableRef.current = ordersByTable;
+}, [ordersByTable]);
+
+// ✅ Evita carreras si cambias de mesa rápido
+const selectTableReqIdRef = useRef(0);
+
+
+const getCurrentOrder = () => {
+  if (!selectedTable) return { items: [] };
+
+  const pending = ordersByTable[selectedTable.id]?.items || [];
+  const saved = savedByTable[selectedTable.id]?.items || [];
+
+  const merged = [];
+  for (const it of [...saved, ...pending]) {
+   const key = `${it.inventoryItemId ?? it.menuRecipeId ?? it.productId ?? ""}__${String(it.name ?? it.displayName ?? "").trim().toLowerCase()}__${Number(it.price ?? 0)}`;
+const idx = merged.findIndex(
+  (m) => `${m.inventoryItemId ?? m.menuRecipeId ?? m.productId ?? ""}__${String(m.name ?? m.displayName ?? "").trim().toLowerCase()}__${Number(m.price ?? 0)}` === key
+);
+
+
+    if (idx >= 0) {
+      merged[idx] = { ...merged[idx], qty: Number(merged[idx].qty || 0) + Number(it.qty || 0) };
+    } else {
+      merged.push({ ...it });
+    }
+  }
+
+  return { items: merged };
+
+
 
   const calcTotal = (items) =>
     Array.isArray(items) ? items.reduce((sum, item) => sum + item.price * item.qty, 0) : 0;
@@ -1106,38 +1196,48 @@ const [savingOrder, setSavingOrder] = useState(false);
 const [paymentMethod, setPaymentMethod] = useState("CASH"); // CASH | CARD | TRANSFER
 const [paymentRef, setPaymentRef] = useState("");
 
-
-
 const handleSaveOrder = async () => {
   // ⛔ BLOQUEO DURO POS (evita doble ejecución)
   if (savingOrder) return;
 
-if (!isTurnoAbierto()) {
-  alert("⛔ Primero abre el turno para empezar el día.");
+  if (!isTurnoAbierto()) {
+    alert("⛔ Primero abre el turno para empezar el día.");
+    return;
+  }
+
+  if (!selectedTable) return alert("Selecciona primero una mesa.");
+const tableId = selectedTable.id;
+const tableName = selectedTable.name;
+
+// ✅ SOLO platillos PENDIENTES (los que aún no se han guardado)
+const pendingItems = ordersByTableRef.current?.[tableId]?.items || [];
+
+
+
+if (!pendingItems.length) {
+  alert("No hay nuevos platillos por guardar en esta mesa.");
   return;
 }
 
 
-  if (!selectedTable) return alert("Selecciona primero una mesa.");
-  if (!currentOrder.items || currentOrder.items.length === 0)
-    return alert("Aún no hay productos en el pedido.");
 
   setSavingOrder(true); // 🔥 se activa ANTES del flujo crítico
 
   try {
-    const total = calcTotal(currentOrder.items);
+    const total = calcTotal(pendingItems);
+
 
     const expandedItems = [];
-    currentOrder.items.forEach((item) => {
+pendingItems.forEach((item) => {
+ 
+
+
       const promo = PROMO_MAPPINGS[item.name];
       if (promo) {
         expandedItems.push({
           productId: item.productId,
           name: promo.inventoryName,
-          price:
-            promo.units > 0
-              ? Number(item.price) / promo.units
-              : Number(item.price),
+          price: promo.units > 0 ? Number(item.price) / promo.units : Number(item.price),
           qty: Number(item.qty) * promo.units,
           inventoryItemId: item.inventoryItemId ?? null,
           menuRecipeId: item.menuRecipeId ?? null,
@@ -1154,46 +1254,87 @@ if (!isTurnoAbierto()) {
       }
     });
 
-const payload = {
-  tableId: selectedTable.id,
-  items: expandedItems,
-  total: Number(total.toFixed(2)),
-};
+   const payload = { tableId, items: expandedItems, total: Number(total.toFixed(2)) };
 
-    const res = await fetch(`${API_URL}/api/orders`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+   // ✅ POST con timeout + error real (NO cambia lógica)
+const controller = new AbortController();
+const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s
 
-    if (!res.ok) {
-      throw new Error("No se pudo guardar el pedido");
-    }
+let res;
+try {
+  res = await fetch(`${API_URL}/api/orders`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    signal: controller.signal,
+  });
+} finally {
+  clearTimeout(timeoutId);
+}
 
-    alert(
-      `✅ Pedido guardado\nMesa: ${selectedTable.name}\nTotal: ${fmtMoney(
-        total
-      )}`
+if (!res.ok) {
+  const detail = await res.text().catch(() => "");
+  console.error("❌ /api/orders error:", res.status, detail);
+  throw new Error(detail || "No se pudo guardar el pedido");
+}
+
+
+   alert(`✅ Pedido guardado\nMesa: ${tableName}\nTotal: ${fmtMoney(total)}`);
+
+
+// ✅ pasa lo guardado a "savedByTable" (para que al volver NO se duplique)
+setSavedByTable((prev) => {
+  const prevSaved = prev?.[tableId]?.items || [];
+  const merged = [...prevSaved];
+
+  for (const it of pendingItems) {
+    const key = `${it.inventoryItemId ?? it.menuRecipeId ?? it.productId ?? ""}__${String(it.name ?? "").trim().toLowerCase()}__${Number(it.price ?? 0)}`;
+    const idx = merged.findIndex((m) =>
+      `${m.inventoryItemId ?? m.menuRecipeId ?? m.productId ?? ""}__${String(m.name ?? "").trim().toLowerCase()}__${Number(m.price ?? 0)}` === key
     );
-setOpenTableIds((prev) => {
+
+    if (idx >= 0) {
+      merged[idx] = {
+        ...merged[idx],
+        qty: Number(merged[idx].qty || 0) + Number(it.qty || 0),
+      };
+    } else {
+      merged.push({ ...it });
+    }
+  }
+
+  return { ...prev, [tableId]: { items: merged } };
+});
+
+
+
+// ✅ limpia SOLO pendientes (lo que acabas de mandar)
+setOrdersByTable((prev) => ({
+  ...prev,
+  [tableId]: { items: [] },
+}));
+
+
+    // ✅ Limpieza de UI INMEDIATA (no depende de refreshes)
+    setOpenTableIds((prev) => {
   const next = new Set(prev);
-  next.add(selectedTable.id);
+  next.add(tableId);
   return next;
 });
 
 
-    setOrdersByTable((prev) => ({
-      ...prev,
-      [selectedTable.id]: { items: [] },
-    }));
 
-setPaymentRef("");
-setPaymentMethod("CASH");
+    setPaymentRef("");
+    setPaymentMethod("CASH");
 
-Promise.allSettled([
-  loadInventoryOptions(),
-  loadLowStock?.(),
-]);
+    // 🔁 REFRESCOS (NO BLOQUEAN el guardado)
+    Promise.allSettled([
+      loadInventoryOptions(),
+      loadRecentOrders(),
+      loadDailyReports?.(),
+      loadLowStock?.(),
+    ]);
+
   } catch (err) {
     console.error(err);
     alert("❌ Error al guardar el pedido. Revisa tu backend.");
@@ -1202,11 +1343,9 @@ Promise.allSettled([
   }
 };
 
-
 const handlePrintQR = () => {
   window.print();
 };
-
 
 
 // =======================
@@ -1228,10 +1367,10 @@ const handleLoadAdminSummary = async ({ silent = false } = {}) => {
 const raw = localStorage.getItem(SHIFT_BASELINE_KEY(todayKey));
 const baseline = raw ? JSON.parse(raw) : { sales: 0, orders: 0 };
 
-    const BASE_URL =
-      typeof API_URL !== "undefined" && API_URL
-        ? API_URL
-        : "http://localhost:4000";
+   const BASE_URL =
+  typeof API_URL !== "undefined" && API_URL
+    ? API_URL
+    : "";
 
     const res = await fetch(
       `${BASE_URL}/api/orders/admin/summary-today`,
@@ -1292,7 +1431,8 @@ const loadRecentOrders = async ({ silent = false } = {}) => {
       setLoadingOrders(true);
       setOrdersError("");
     }
-    const BASE_URL = (typeof API_URL !== "undefined" && API_URL) ? API_URL : "http://localhost:4000";
+    const BASE_URL = (typeof API_URL !== "undefined" && API_URL) ? API_URL : "";
+
     const res = await fetch(`${BASE_URL}/api/orders`, { cache: "no-store" });
     if (!res.ok) throw new Error("No se pudo cargar el historial");
     const data = await res.json();
@@ -1323,10 +1463,10 @@ const loadRecentOrders = async ({ silent = false } = {}) => {
     try {
       setLoadingLowStock(true);
       setLowStockError("");
-      const res = await fetch(`${API_URL}/api/inventory/summary`, { cache: "no-store" });
+      const res = await fetch(`${API_URL}/api/orders/debug/inventory-items`, { cache: "no-store" });
       if (!res.ok) throw new Error("No se pudo cargar inventario");
       const data = await res.json();
-const list = Array.isArray(data?.items) ? data.items : [];
+      const list = Array.isArray(data) ? data : [];
 setInventoryOptions(list); // ✅ refresca inventario real para el menú rápido
 
 
@@ -1599,7 +1739,7 @@ const buildCloseDayReport = () => {
     const id = setInterval(() => {
       loadRecentOrders({ silent: true });
       if (adminSummaryRef.current) loadAdminSummary({ silent: true });
-    }, 1500);
+    }, 30000);
     return () => clearInterval(id);
   }, []);
 
@@ -1738,7 +1878,10 @@ try {
 
   try {
     // 1) Traer resumen real DEL DÍA (antes del corte)
-    const res = await fetch("http://localhost:4000/api/orders/admin/summary");
+   const res = await fetch(
+  `${import.meta.env.VITE_API_URL}/api/orders/admin/summary`
+);
+
     if (!res.ok) throw new Error("No se pudo leer resumen para cierre");
 
     const data = await res.json();
@@ -1761,9 +1904,13 @@ try {
     setCashCount("");
 
     // 4) (Opcional) endpoint de cierre
-    try {
-      await fetch("http://localhost:4000/api/orders/close-day", { method: "POST" });
-    } catch {}
+try {
+  await fetch(
+    `${import.meta.env.VITE_API_URL}/api/orders/close-day`,
+    { method: "POST" }
+  );
+} catch {}
+
 
     // 5) Refrescar resumen (ya debe dar 0/0 por baseline)
     await handleLoadAdminSummary();
@@ -2107,7 +2254,15 @@ useEffect(() => {
         <button
           type="button"
           disabled={closingTable}
-          onClick={async () => {
+       
+onClick={async () => {
+  if (!selectedTable) {
+    alert("Selecciona una mesa primero.");
+    return;
+  }
+
+
+
 if (!isTurnoAbierto()) {
   alert("⛔ Turno cerrado. Abre turno para cobrar.");
   return;
@@ -2136,15 +2291,25 @@ setOpenTableIds((prev) => {
   return next;
 });
 
-              setShowCloseModal(false);
+            setShowCloseModal(false);
               setClosePaymentRef("");
               setClosePaymentMethod("CASH");
 
-              // limpia la mesa en frontend
-              setOrdersByTable((prev) => ({
-                ...prev,
-                [selectedTable.id]: { items: [] },
-              }));
+               // limpia la mesa en frontend
+             setOrdersByTable((prev) => {
+  const existing = prev?.[selectedTable.id]?.items || [];
+
+  // ✅ Si ya agregaste cosas localmente, NO sobreescribas con lo del backend
+  if (Array.isArray(existing) && existing.length > 0) {
+    return prev;
+  }
+  return {
+    ...prev,
+    [selectedTable.id]: { items: [] },
+
+  };
+});
+
             } catch (err) {
               console.error(err);
               alert("❌ Error al cerrar cuenta");
@@ -2887,14 +3052,16 @@ setOpenTableIds((prev) => {
                         {(area.tables || []).length === 0 ? (
                           <p style={{ fontSize: 11, opacity: 0.7 }}>Sin mesas.</p>
                         ) : (
-                          (area.tables || []).map((table) => {
-                            const current = ordersByTable[table.id] || { items: [] };
-                          const hasItems =
-  (current.items && current.items.length > 0) || openTableIds.has(table.id);
+                       (area.tables || []).map((table) => {
+  const current = ordersByTable[table.id] || { items: [] };
+  const saved = savedByTable?.[table.id] || { items: [] };
+  const count = (current.items?.length || 0) + (saved.items?.length || 0);
 
-                            const selected = isSelected(area.id, table.id);
+  const hasItems = count > 0 || openTableIds.has(table.id);
 
-                            return (
+  const selected = isSelected(area.id, table.id);
+
+  return (
                              <button
     key={table.id}
     onClick={() => handleSelectTable(area, table)}
@@ -2919,7 +3086,7 @@ setOpenTableIds((prev) => {
 
     {hasItems ? (
       <span style={{ marginLeft: 6, fontSize: 10, opacity: 0.85 }}>
-        ({current.items.length})
+        ({count})
       </span>
     ) : null}
 
@@ -3085,9 +3252,10 @@ setOpenTableIds((prev) => {
                           backgroundColor: "rgba(15,23,42,0.98)",
                         }}
                       >
-                        {currentOrder.items.map((item) => (
-                          <div
-                            key={item.productId}
+                       {currentOrder.items.map((item, idx) => (
+  <div
+    key={`${item.productId ?? item.name ?? "item"}-${idx}`}
+
                             style={{
                               display: "flex",
                               alignItems: "center",
@@ -3561,119 +3729,97 @@ boxShadow: noStock ? "none" : `0 0 0 1px ${catColor}40`,
                 }}
               />
 
-              {/* FOTO (compacta) */}
-              <div style={{ display: "flex", gap: 10, alignItems: "center", minWidth: 0 }}>
-                <div
-                 style={{
-  width: "100%",
-  aspectRatio: "1 / 1",
-  borderTopLeftRadius: 14,
-  borderTopRightRadius: 14,
-  overflow: "hidden",
-  borderBottom: "1px solid rgba(148,163,184,0.20)",
-  background: "rgba(2,6,23,0.25)",
-}}
-                  title="Foto del producto"
-                >
-                  {p.imageData || p.imageUrl ? (
-                    <img
-                      src={p.imageData || p.imageUrl}
-                      alt=""
-                      style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                    />
-                  ) : (
-                    <span style={{ fontSize: 10, opacity: 0.7, fontWeight: 900 }}>IMG</span>
-                  )}
-                </div>
+              {/* FOTO (compacta) - en edición NO se muestra preview para que no ocupe espacio */}
+<div style={{ display: "flex", gap: 10, alignItems: "center", minWidth: 0 }}>
+  <details style={{ minWidth: 0, width: "100%" }}>
+    <summary
+      style={{
+        cursor: "pointer",
+        fontSize: 11,
+        fontWeight: 900,
+        opacity: 0.9,
+        listStyle: "none",
+        userSelect: "none",
+        padding: "8px 10px",
+        borderRadius: 999,
+        border: "1px solid rgba(148,163,184,0.35)",
+        background: "rgba(2,6,23,0.28)",
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+      }}
+    >
+      Foto <span style={{ fontSize: 10, opacity: 0.65 }}>(URL o subir)</span>
+    </summary>
 
-                <details style={{ minWidth: 0, width: "100%" }}>
-                  <summary
-                    style={{
-                      cursor: "pointer",
-                      fontSize: 11,
-                      fontWeight: 900,
-                      opacity: 0.9,
-                      listStyle: "none",
-                      userSelect: "none",
-                      padding: "8px 10px",
-                      borderRadius: 999,
-                      border: "1px solid rgba(148,163,184,0.35)",
-                      background: "rgba(2,6,23,0.28)",
-                      whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                    }}
-                  >
-                    Foto <span style={{ fontSize: 10, opacity: 0.65 }}>(URL o subir)</span>
-                  </summary>
+    <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+      <input
+        value={p.imageUrl || ""}
+        placeholder="Pega URL (https://...)"
+        onChange={(e) => handleMenuFieldChange(p.id, "imageUrl", e.target.value)}
+        style={{
+          width: "100%",
+          minWidth: 0,
+          padding: "8px 10px",
+          borderRadius: 12,
+          border: "1px solid rgba(75,85,99,0.9)",
+          backgroundColor: "rgba(15,23,42,0.96)",
+          color: "var(--pos-text, #e5e7eb)",
+          fontSize: 11,
+        }}
+      />
 
-                  <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
-                    <input
-                      value={p.imageUrl || ""}
-                      placeholder="Pega URL (https://...)"
-                      onChange={(e) => handleMenuFieldChange(p.id, "imageUrl", e.target.value)}
-                      style={{
-                        width: "100%",
-                        minWidth: 0,
-                        padding: "8px 10px",
-                        borderRadius: 12,
-                        border: "1px solid rgba(75,85,99,0.9)",
-                        backgroundColor: "rgba(15,23,42,0.96)",
-                        color: "var(--pos-text, #e5e7eb)",
-                        fontSize: 11,
-                      }}
-                    />
+      <input
+        type="file"
+        accept="image/*"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = () => {
+            const dataUrl = String(reader.result || "");
+            handleMenuFieldChange(p.id, "imageData", dataUrl);
+          };
+          reader.readAsDataURL(file);
+          e.target.value = "";
+        }}
+        style={{
+          width: "100%",
+          minWidth: 0,
+          padding: "8px 10px",
+          borderRadius: 12,
+          border: "1px solid rgba(75,85,99,0.9)",
+          backgroundColor: "rgba(15,23,42,0.96)",
+          color: "var(--pos-text, #e5e7eb)",
+          fontSize: 11,
+        }}
+      />
 
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (!file) return;
-                        const reader = new FileReader();
-                        reader.onload = () => {
-                          const dataUrl = String(reader.result || "");
-                          handleMenuFieldChange(p.id, "imageData", dataUrl);
-                        };
-                        reader.readAsDataURL(file);
-                        e.target.value = "";
-                      }}
-                      style={{
-                        width: "100%",
-                        minWidth: 0,
-                        padding: "8px 10px",
-                        borderRadius: 12,
-                        border: "1px solid rgba(75,85,99,0.9)",
-                        backgroundColor: "rgba(15,23,42,0.96)",
-                        color: "var(--pos-text, #e5e7eb)",
-                        fontSize: 11,
-                      }}
-                    />
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <button
+          type="button"
+          onClick={() => {
+            handleMenuFieldChange(p.id, "imageUrl", "");
+            handleMenuFieldChange(p.id, "imageData", "");
+          }}
+          style={{
+            padding: "8px 12px",
+            borderRadius: 999,
+            border: "1px solid rgba(239,68,68,0.55)",
+            background: "rgba(239,68,68,0.10)",
+            color: "var(--pos-text, #e5e7eb)",
+            fontSize: 11,
+            fontWeight: 900,
+            cursor: "pointer",
+          }}
+        >
+          Quitar foto
+        </button>
+      </div>
+    </div>
+  </details>
+</div>
 
-                    <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          handleMenuFieldChange(p.id, "imageUrl", "");
-                          handleMenuFieldChange(p.id, "imageData", "");
-                        }}
-                        style={{
-                          padding: "8px 12px",
-                          borderRadius: 999,
-                          border: "1px solid rgba(239,68,68,0.55)",
-                          background: "rgba(239,68,68,0.10)",
-                          color: "var(--pos-text, #e5e7eb)",
-                          fontSize: 11,
-                          fontWeight: 900,
-                          cursor: "pointer",
-                        }}
-                      >
-                        Quitar foto
-                      </button>
-                    </div>
-                  </div>
-                </details>
-              </div>
 
               {/* CATEGORÍA/OPCIONES */}
               <input
