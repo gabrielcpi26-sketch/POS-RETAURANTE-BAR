@@ -52,11 +52,16 @@ model Order {
 
   total     Float    @default(0)
   createdAt DateTime @default(now())
+
   paymentMethod String? @default("CASH") // CASH | CARD | TRANSFER
   paymentRef    String?
- isPaid   Boolean  @default(false)
+
+  isPaid   Boolean  @default(false)
   paidAt   DateTime?
 
+  // ✅ NUEVO (cancelaciones PRO)
+  isCancelled Boolean  @default(false)
+  cancelledAt DateTime?
 }
 
 model DailyReport {
@@ -65,7 +70,10 @@ model DailyReport {
   totalOrders   Int
   totalSales    Float
 
- 
+grossSales     Decimal?
+cancelledSales Decimal?
+netSales       Decimal?
+
   paymentCash      Float @default(0)
   paymentCard      Float @default(0)
   paymentTransfer  Float @default(0)
@@ -98,11 +106,10 @@ model InventoryMovement {
 }
 
 model MenuRecipe {
-  id          Int                    @id @default(autoincrement())
-  menuName    String                 @unique   // nombre como aparece en el POS (ej. "Cerveza nacional")
-  createdAt   DateTime               @default(now())
-  updatedAt   DateTime               @updatedAt
-  
+  id        Int      @id @default(autoincrement())
+  menuName  String   @unique
+  items     String?  @db.Text  // 👈 ESTE ES EL QUE FALTA
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
-
 	
