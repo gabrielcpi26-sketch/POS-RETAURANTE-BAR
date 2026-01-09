@@ -7,35 +7,23 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "autoUpdate",
-      includeAssets: ["favicon.ico", "robots.txt", "apple-touch-icon.png"],
+      includeAssets: ["apple-touch-icon.png", "pwa-192x192.png", "pwa-512x512.png"],
       manifest: {
-        name: "POS Multi Bar",
-        short_name: "POS",
-        description: "POS Multi Bar / Restaurante",
-        theme_color: "#0f172a",
-        background_color: "#0f172a",
-        display: "standalone",
-        scope: "/",
+        id: "/",
+        name: "POS Bar Restaurante",
+        short_name: "POS Bar",
+        description: "POS Bar Restaurante (mesas, ventas, inventario)",
         start_url: "/",
+        scope: "/",
+        display: "standalone",
+        background_color: "#F5F7FB",
+        theme_color: "#BFE8DD",
         icons: [
           { src: "/pwa-192x192.png", sizes: "192x192", type: "image/png" },
           { src: "/pwa-512x512.png", sizes: "512x512", type: "image/png" },
-          { src: "/pwa-512x512.png", sizes: "512x512", type: "image/png", purpose: "any maskable" }
-        ],
-      },
-      workbox: {
-        // ✅ Evita cachear llamadas al backend (Render/Supabase)
-        runtimeCaching: [
-          {
-            urlPattern: ({ url }) => url.pathname.startsWith("/api"),
-            handler: "NetworkOnly",
-          },
-          {
-            urlPattern: ({ url }) => url.origin.includes("supabase.co"),
-            handler: "NetworkOnly",
-          },
-        ],
-      },
-    }),
-  ],
+          { src: "/apple-touch-icon.png", sizes: "180x180", type: "image/png", purpose: "any" }
+        ]
+      }
+    })
+  ]
 });
