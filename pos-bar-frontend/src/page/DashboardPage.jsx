@@ -8,6 +8,8 @@ import PosShell from "../components/PosShell.jsx";
 import { Bar, Pie } from "react-chartjs-2";
 import ChartDataLabels from "chartjs-plugin-datalabels";
 import TableQRCode from "../components/TableQRCode.jsx";
+import { qzListPrinters, qzPrintEscpos } from "../utils/qzPrint";
+
 
 
 
@@ -152,6 +154,8 @@ function getAutoRange(days = 7) {
 
 
 
+
+
 // =======================
 // ROLES
 // =======================
@@ -203,6 +207,54 @@ const fmtMoney = (n) =>
     Number(n || 0)
   );
 
+
+
+function printTicket(order) {
+  if (!window.qz) {
+    alert("❌ QZ Tray no detectado");
+    return;
+  }
+
+  const printer = localStorage.getItem("pos_selected_printer");
+  if (!printer) {
+    alert("❌ No hay impresora seleccionada");
+    return;
+  }
+
+  const lines = [];
+
+  lines.push("=== PEDIDO ===");
+  lines.push(`Mesa: ${order.tableName || ""}`);
+  lines.push("-------------------------");
+
+  order.items.forEach((item) => {
+    lines.push(`${item.name}  $${item.price.toFixed(2)}`);
+
+    if (item.extras && item.extras.length > 0) {
+      item.extras.forEach((e) => {
+        lines.push(`  • ${e.name} (+$${e.price})`);
+      });
+    }
+
+    if (item.note) {
+      lines.push(`  Nota: ${item.note}`);
+    }
+
+    lines.push("");
+  });
+
+  lines.push("-------------------------");
+  lines.push(`TOTAL: $${order.total.toFixed(2)}`);
+  lines.push("\n\n");
+
+  const config = qz.configs.create(printer);
+  qz.print(config, [{
+    type: "raw",
+    format: "plain",
+    data: lines.join("\n")
+  }]);
+}
+
 // ======================
 // KEYS POS (DEFINITIVAS)
 // ======================
@@ -224,6 +276,7 @@ const [summaryError, setSummaryError] = useState("");
 
 const adminSummaryRef = useRef(null);
 const adminSummaryReqIdRef = useRef(0);
+
 
   // =======================
   // TEMA
@@ -257,6 +310,10 @@ const [turnoAbierto, setTurnoAbierto] = useState(
     [baseTheme, customPrimary]
   );
 
+const [printerName, setPrinterName] = useState(() => {
+  try { return localStorage.getItem("pos_printer_name_v1") || ""; } catch { return ""; }
+});
+const [printers, setPrinters] = useState([]);
 
 
 
@@ -356,11 +413,50 @@ useEffect(() => {
 }, []);
 
 
-function abrirTurnoGlobal() {
+async function abrirTurnoGlobal() {
   try {
+    // 1) Abrir turno (lo que ya hacías)
     localStorage.setItem(TURNO_KEY, "1");
     window.dispatchEvent(new Event("pos_turno_global_changed"));
   } catch {}
+
+  // 2) ✅ FIX 3: Guardar baseline COMPLETO al abrir turno (net/gross/cancel/orders)
+  //    Si falla el fetch, NO rompe el POS: solo no se guarda baseline.
+  try {
+    const todayKey = new Date().toLocaleDateString("en-CA");
+
+    const BASE_URL =
+      typeof API_URL !== "undefined" && API_URL
+        ? API_URL
+        : "";
+
+    const res = await fetch(`${BASE_URL}/api/orders/admin/summary-today`, {
+      cache: "no-store",
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+
+      const netFromServer = Number(data.netSales ?? data.totalSales ?? 0);
+      const ordersFromServer = Number(data.totalOrders ?? 0);
+      const grossFromServer = Number(data.grossSales ?? 0);
+      const cancelledFromServer = Number(data.cancelledSales ?? 0);
+
+      const newBaseline = {
+        sales: Math.max(0, netFromServer),
+        orders: Math.max(0, ordersFromServer),
+        grossSales: Math.max(0, grossFromServer),
+        cancelledSales: Math.max(0, cancelledFromServer),
+      };
+
+      localStorage.setItem(
+        SHIFT_BASELINE_KEY(todayKey),
+        JSON.stringify(newBaseline)
+      );
+    }
+  } catch {}
+
+  // 3) Estado UI (lo que ya tenías)
   setTurnoGlobalAbierto(true); // ✅ AQUÍ
 }
 
@@ -372,7 +468,9 @@ function abrirTurnoGlobal() {
   setTurnoGlobalAbierto(false); // ✅ AQUÍ
 }
 
-  useEffect(() => {
+ // ✅ DUPLICADO DESACTIVADO (ya existe el useEffect arriba)
+if (false) useEffect(() => {
+
     const syncTurno = () => {
       try {
         setTurnoGlobalAbierto(localStorage.getItem(TURNO_KEY) === "1");
@@ -392,6 +490,145 @@ function abrirTurnoGlobal() {
       window.removeEventListener("storage", onStorage);
     };
   }, []);
+
+
+// ======================
+// EXTRAS PRO (Upsell) — por restaurante (hostname)
+// ======================
+
+const EXTRAS_STORAGE_KEY = `pos_extras_catalog_${window.location.hostname}`;
+
+function loadExtrasCatalog() {
+  try {
+    const raw = localStorage.getItem(EXTRAS_STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {}
+  return [
+    { id: "extra-queso", name: "Queso extra", price: 15, appliesTo: "Comida" },
+    { id: "extra-tocino", name: "Tocino", price: 20, appliesTo: "Comida" },
+    { id: "extra-guac", name: "Guacamole", price: 25, appliesTo: "Comida" },
+    { id: "extra-salsa", name: "Salsa especial", price: 10, appliesTo: "Comida" },
+    { id: "extra-shot", name: "Shot extra", price: 25, appliesTo: "Bebidas" },
+    { id: "extra-limon", name: "Limón extra", price: 5, appliesTo: "Bebidas" },
+  ];
+}
+
+const [extrasCatalog, setExtrasCatalog] = useState(loadExtrasCatalog);
+
+function saveExtrasCatalog(next) {
+  setExtrasCatalog(next);
+  localStorage.setItem(EXTRAS_STORAGE_KEY, JSON.stringify(next));
+}
+
+// ✅ Modal state
+const [extrasOpen, setExtrasOpen] = useState(false);
+
+// ✅ OJO: aquí guardamos la *línea final* (ya con displayName/precio/tamaño/categoría)
+const [extrasLine, setExtrasLine] = useState(null);
+
+// ✅ FIX: tu modal todavía usa extrasProduct
+const extrasProduct = extrasLine;
+
+const [extrasSelected, setExtrasSelected] = useState([]); // array de extras
+
+
+const [showExtrasEditor, setShowExtrasEditor] = useState(false);
+const [newExtra, setNewExtra] = useState({
+  name: "",
+  price: "",
+  appliesTo: "Comida",
+});
+
+
+
+function openExtrasForProduct(finalLine) {
+  // finalLine = uniqueLine o finalItem (ya listo)
+  setExtrasLine(finalLine);
+  setExtrasSelected([]);
+  setExtrasOpen(true);
+}
+
+function toggleExtra(extra) {
+  setExtrasSelected((prev) => {
+    const exists = prev.some((x) => x.id === extra.id);
+
+    // Quitar extra (si ya existe)
+    if (exists) {
+      return prev.filter((x) => x.id !== extra.id);
+    }
+
+    // 🚫 Máximo de extras
+    if (prev.length >= MAX_EXTRAS) {
+      alert(`Solo puedes elegir hasta ${MAX_EXTRAS} extras`);
+      return prev;
+    }
+
+    // Agregar extra
+    return [...prev, extra];
+  });
+}
+
+function calcExtrasTotal(list) {
+  return (list || []).reduce((sum, e) => sum + Number(e.price || 0), 0);
+}
+
+// ✅ Cerrar modal (helper)
+function closeExtras() {
+  setExtrasOpen(false);
+  setExtrasLine(null);
+  setExtrasSelected([]);
+}
+
+// ✅ Agregar SIN extras: NO vuelvas a handleQuickProductClick
+function addWithoutExtras() {
+  if (!extrasLine) return;
+  handleAddProduct(extrasLine); // directo a la orden
+  closeExtras();
+}
+
+// ✅ Agregar CON extras: suma a la línea final y NO re-entra a QuickPick
+function addWithExtras() {
+  if (!extrasLine) return;
+
+  const extrasTotal = calcExtrasTotal(extrasSelected);
+
+  const extrasText = (extrasSelected || []).map((e) => e.name).join(", ");
+
+const lineWithExtras = {
+  ...extrasLine,
+
+// ✅ Nombre LIMPIO (PRO)
+  displayName: extrasLine.displayName || extrasLine.name,
+
+  // ✅ precio final al ticket
+  price: Number(extrasLine.price || 0) + extrasTotal,
+
+  extrasTotal,
+  extras: (extrasSelected || []).map((e) => ({
+    id: e.id,
+    name: e.name,
+    price: Number(e.price || 0),
+  })),
+};
+
+  handleAddProduct(lineWithExtras); // ✅ directo
+  closeExtras();
+}
+
+const editorSelectStyle = {
+  width: "100%",
+  minWidth: 0,
+  height: 40,
+  padding: "8px 10px",
+  borderRadius: 12,
+  border: "1px solid rgba(75,85,99,0.9)",
+  backgroundColor: "rgba(15,23,42,0.96)",
+  color: "var(--pos-text, #e5e7eb)",
+  fontSize: 11,
+  fontWeight: 800,
+  boxSizing: "border-box",
+  outline: "none",
+};
 
   // =======================
   // PIN MESERO (solo /mesero)
@@ -434,6 +671,11 @@ function abrirTurnoGlobal() {
     setShowLogoEditor(false);
   }
 
+
+
+
+
+
   // =======================
   // INVENTARIO (para mapeo)
   // =======================
@@ -452,6 +694,142 @@ function abrirTurnoGlobal() {
       console.error("Error cargando inventario:", err);
     }
   }
+
+// =======================
+// RECETAS PRO (CRUD)
+// =======================
+const [showRecipesPro, setShowRecipesPro] = useState(false);
+const [menuRecipes, setMenuRecipes] = useState([]);
+const [recipesLoading, setRecipesLoading] = useState(false);
+const [recipesError, setRecipesError] = useState("");
+
+const emptyRecipe = { id: null, menuName: "", items: [] };
+const [recipeDraft, setRecipeDraft] = useState(emptyRecipe);
+
+async function loadMenuRecipes() {
+  setRecipesError("");
+  setRecipesLoading(true);
+  try {
+    const res = await fetch(`${API_URL}/api/menu-recipes`, { cache: "no-store" });
+    if (!res.ok) throw new Error("No se pudo cargar recetas");
+    const data = await res.json();
+    setMenuRecipes(Array.isArray(data) ? data : []);
+  } catch (e) {
+    console.error(e);
+    setRecipesError(e.message || "Error cargando recetas");
+    setMenuRecipes([]);
+  } finally {
+    setRecipesLoading(false);
+  }
+}
+
+function addRecipeLine() {
+  setRecipeDraft((prev) => ({
+    ...prev,
+    items: [...(prev.items || []), { inventoryItemId: "", qty: 1 }],
+  }));
+}
+
+function updateRecipeLine(idx, key, value) {
+  setRecipeDraft((prev) => {
+    const next = [...(prev.items || [])];
+    next[idx] = { ...(next[idx] || {}), [key]: value };
+    return { ...prev, items: next };
+  });
+}
+
+function removeRecipeLine(idx) {
+  setRecipeDraft((prev) => {
+    const next = [...(prev.items || [])];
+    next.splice(idx, 1);
+    return { ...prev, items: next };
+  });
+}
+
+async function saveRecipeDraft() {
+  setRecipesError("");
+  try {
+    const cleanName = String(recipeDraft.menuName || "").trim();
+    if (!cleanName) {
+      alert("Ponle nombre a la receta");
+      return;
+    }
+
+    // qty entero (PRO): nada de 0.2
+    const cleanItems = (Array.isArray(recipeDraft.items) ? recipeDraft.items : [])
+      .map((it) => ({
+        inventoryItemId: Number(it.inventoryItemId),
+        qty: Number(it.qty),
+      }))
+      .filter((it) => Number.isFinite(it.inventoryItemId) && it.inventoryItemId > 0 && Number.isFinite(it.qty) && it.qty > 0);
+
+    const payload = { menuName: cleanName, items: cleanItems };
+
+    if (recipeDraft.id) {
+      const res = await fetch(`${API_URL}/api/menu-recipes/${recipeDraft.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error("No se pudo actualizar receta");
+    } else {
+      const res = await fetch(`${API_URL}/api/menu-recipes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error("No se pudo crear receta");
+    }
+
+    await loadMenuRecipes();
+    setRecipeDraft(emptyRecipe);
+    alert("✅ Receta guardada");
+  } catch (e) {
+    console.error(e);
+    setRecipesError(e.message || "Error guardando receta");
+  }
+}
+
+async function deleteRecipeById(id) {
+  try {
+    const ok = window.confirm("¿Eliminar receta? (no afecta ventas pasadas)");
+    if (!ok) return;
+
+    const res = await fetch(`${API_URL}/api/menu-recipes/${id}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) throw new Error("No se pudo eliminar receta");
+
+    await loadMenuRecipes();
+    setRecipeDraft(emptyRecipe);
+  } catch (e) {
+    console.error(e);
+    setRecipesError(e.message || "Error eliminando receta");
+  }
+}
+
+
+const visibleExtras = useMemo(() => {
+  if (!extrasLine) return [];
+  const ids = Array.isArray(extrasLine.allowedExtrasIds)
+    ? extrasLine.allowedExtrasIds
+    : [];
+
+  // Si el platillo tiene extras definidos, mostrar solo esos
+  if (ids.length > 0) {
+    return (extrasCatalog || []).filter((e) => ids.includes(e.id));
+  }
+
+  // Si no definiste extras por platillo, fallback por sección (Comida/Bebidas)
+  const sec = String(extrasLine.section || "").trim();
+  if (!sec) return (extrasCatalog || []);
+
+  return (extrasCatalog || []).filter(
+    (e) => String(e.appliesTo || "").trim() === sec
+  );
+}, [extrasLine, extrasCatalog]);
+
+
 
   const findInventoryIdByName = (name) => {
     const n = String(name || "").trim().toLowerCase();
@@ -508,8 +886,8 @@ const handleAddMenuProduct = (sectionName) => {
 
   setQuickProducts((prev) => {
     const newItem = {
-imageUrl: "",
-imageData: "",
+      imageUrl: "",
+      imageData: "",
 
       id: Date.now(),
       section: targetSection,
@@ -523,11 +901,15 @@ imageData: "",
       sizeLargePrice: 0,
       inventoryItemId: null,
       menuRecipeId: null,
+
+      // ✅ CLAVE PARA EXTRAS
+      allowExtras: true,
+ // ✅ NUEVO: lista de extras permitidos para este platillo
+  extrasIds: [],
     };
     return [...prev, newItem];
   });
 };
-
 
 
 
@@ -542,6 +924,9 @@ const getQuickProductsBySectionAndCategory = () => {
   }
   return sections;
 };
+
+
+const [recipeOptions, setRecipeOptions] = useState([]);
 
 
 // =======================
@@ -620,22 +1005,34 @@ if (hasSizes) {
 }
 
 
-    // 👉 SIN TAMAÑOS: AGREGA DIRECTO
-    const finalPrice = Number(p.price || 0);
+ // 👉 SIN TAMAÑOS: arma el item final
+const finalPrice = Number(p.price || 0);
 
-    handleAddProduct({
-      id: `${p.id}-${Date.now()}`,
-      baseProductId: p.id,
-      name: p.name,
-      displayName: `${p.name}${chosenCategory ? " " + chosenCategory : ""}`,
-      price: finalPrice,
-      sizeLabel: "",
-      categoryChoice: chosenCategory,
-      inventoryItemId: p.inventoryItemId ?? null,
-      menuRecipeId: p.menuRecipeId ?? null,
-    });
+const finalItem = {
+  id: `${p.id}-${Date.now()}`,
+  baseProductId: p.id,
+  name: p.name,
+  displayName: `${p.name}${chosenCategory ? " " + chosenCategory : ""}`,
+  price: finalPrice,
+  sizeLabel: "",
+  categoryChoice: chosenCategory,
+  inventoryItemId: p.inventoryItemId ?? null,
+  menuRecipeId: p.menuRecipeId ?? null,
+allowedExtrasIds: Array.isArray(p.extrasIds) ? p.extrasIds : [],
+section: p.section || "",
 
-    return closeQuickPick();
+};
+
+// ✅ Si quiere extras, abre extras y NO agregues todavía
+if (p?.allowExtras) {
+  closeQuickPick();
+  openExtrasForProduct(finalItem);
+  return;
+}
+
+handleAddProduct(finalItem);
+return closeQuickPick();
+
   }
 
   // =======================
@@ -646,21 +1043,32 @@ if (hasSizes) {
     const finalPrice = Number(picked.meta?.price || 0);
     const categoryChoice = picked.meta?.categoryChoice || "";
 
-    handleAddProduct({
-      id: `${p.id}-${Date.now()}`,
-      baseProductId: p.id,
-      name: p.name,
-      displayName: `${p.name}${categoryChoice ? " " + categoryChoice : ""}${
-        sizeLabel ? " " + sizeLabel : ""
-      }`,
-      price: finalPrice, // ✅ PRECIO SEGÚN TAMAÑO
-      sizeLabel,
-      categoryChoice,
-      inventoryItemId: p.inventoryItemId ?? null,
-      menuRecipeId: p.menuRecipeId ?? null,
-    });
+   const finalItem = {
+  id: `${p.id}-${Date.now()}`,
+  baseProductId: p.id,
+  name: p.name,
+  displayName: `${p.name}${categoryChoice ? " " + categoryChoice : ""}${sizeLabel ? " " + sizeLabel : ""}`,
+  price: finalPrice, // ✅ precio según tamaño
+  sizeLabel,
+  categoryChoice,
+  inventoryItemId: p.inventoryItemId ?? null,
+  menuRecipeId: p.menuRecipeId ?? null,
+allowedExtrasIds: Array.isArray(p.extrasIds) ? p.extrasIds : [],
+section: p.section || "",
 
-    return closeQuickPick();
+};
+
+// ✅ Si en QuickPick eligieron "con extras", abre extras ya con precio final (tamaño aplicado)
+if (p?.allowExtras) {
+
+  closeQuickPick();
+  openExtrasForProduct(finalItem);
+  return;
+}
+
+handleAddProduct(finalItem);
+return closeQuickPick();
+
   }
 };
 
@@ -676,6 +1084,11 @@ useEffect(() => {
 }, [quickPickOpen, quickPickInput, quickPickOpts, quickPickStep, quickPickProduct]);
 
 
+useEffect(() => {
+  if (showMenuEditor) loadRecipeOptions();
+}, [showMenuEditor]);
+
+
   // =======================
   // ÁREAS / MESAS
   // =======================
@@ -684,6 +1097,8 @@ const [closePaymentMethod, setClosePaymentMethod] = useState("CASH");
 const [closePaymentRef, setClosePaymentRef] = useState("");
 const [closingTable, setClosingTable] = useState(false);
 const [openTableIds, setOpenTableIds] = useState(() => new Set());
+const [extrasNote, setExtrasNote] = useState("");
+
 
 
 
@@ -942,11 +1357,20 @@ if (product?.inventoryItemId != null) {
           categoryChoice: product.categoryChoice || "",
           sizeLabel: product.sizeLabel || "",
           baseProductId: product.baseProductId || product.id,
+// ✅ NUEVO (notas + extras persistentes)
+  note: String(product.note || ""),
+ // ✅ NUEVO
+  extras: Array.isArray(product.extras) ? product.extras : [],
+  extrasTotal: Number(product.extrasTotal || 0),
+
         });
       }
 
       return { ...prev, [selectedTable.id]: { items } };
     });
+
+
+
 
 // 🔥 DESCONTAR STOCK LOCAL INMEDIATO (UI)
 if (product.inventoryItemId) {
@@ -1013,6 +1437,10 @@ const handleSetItemNote = (productId, note) => {
 // =======================
 const handleQuickProductClick = (p) => {
   if (!selectedTable) return;
+const wantsExtras = !!p?.allowExtras;
+
+
+
 
   // 🚨 Validar stock antes de permitir agregar
   if (p.inventoryItemId) {
@@ -1050,12 +1478,13 @@ if (inv && Number.isFinite(stockNum) && stockNum === 0) {
     setQuickPickProduct(p);
     setQuickPickStep("category");
     setQuickPickOpts(
-      catOpts.map((c) => ({
-        key: c,
-        label: c,
-        meta: { categoryChoice: c },
-      }))
-    );
+  catOpts.map((c) => ({
+    key: c,
+    label: c,
+    meta: { categoryChoice: c, wantsExtras },
+  }))
+);
+
     setQuickPickInput("");
     setQuickPickOpen(true);
     return;
@@ -1075,6 +1504,7 @@ if (inv && Number.isFinite(stockNum) && stockNum === 0) {
           sizeLabel: p.sizeSmallLabel || "Chico",
           price: Number(p.sizeSmallPrice || 0),
           categoryChoice: chosenCategory,
+  wantsExtras,
         },
       });
     }
@@ -1086,6 +1516,7 @@ if (inv && Number.isFinite(stockNum) && stockNum === 0) {
           sizeLabel: p.sizeLargeLabel || "Grande",
           price: Number(p.sizeLargePrice || 0),
           categoryChoice: chosenCategory,
+  wantsExtras,
         },
       });
     }
@@ -1116,9 +1547,18 @@ if (inv && Number.isFinite(stockNum) && stockNum === 0) {
     categoryChoice: chosenCategory,
     inventoryItemId: p.inventoryItemId ?? null,
     menuRecipeId: p.menuRecipeId ?? null,
+ // ✅ NUEVO: para filtrar extras en el modal
+  allowedExtrasIds: Array.isArray(p.extrasIds) ? p.extrasIds : [],
+  section: p.section || "",
   };
 
-  handleAddProduct(uniqueLine);
+  // ✅ EXTRAS: abrir DESPUÉS de armar uniqueLine (ya trae nombre/precio final)
+if (p?.allowExtras) {
+  openExtrasForProduct(uniqueLine);
+  return;
+}
+
+handleAddProduct(uniqueLine);
 };
 
 
@@ -1243,9 +1683,7 @@ const handlePrintQR = () => {
 // RESUMEN DUEÑO + PEDIDOS RECIENTES
 // =======================
 
-
 const handleLoadAdminSummary = async ({ silent = false } = {}) => {
-
   const reqId = ++adminSummaryReqIdRef.current;
 
   try {
@@ -1254,34 +1692,75 @@ const handleLoadAdminSummary = async ({ silent = false } = {}) => {
       setSummaryError("");
     }
 
- const todayKey = new Date().toLocaleDateString("en-CA");
-const raw = localStorage.getItem(SHIFT_BASELINE_KEY(todayKey));
-const baseline = raw ? JSON.parse(raw) : { sales: 0, orders: 0 };
+    const todayKey = new Date().toLocaleDateString("en-CA");
+    const raw = localStorage.getItem(SHIFT_BASELINE_KEY(todayKey));
+    const baseline = raw
+      ? JSON.parse(raw)
+      : { sales: 0, orders: 0, grossSales: 0, cancelledSales: 0 };
 
-   const BASE_URL =
-  typeof API_URL !== "undefined" && API_URL
-    ? API_URL
-    : "";
+    const BASE_URL =
+      typeof API_URL !== "undefined" && API_URL
+        ? API_URL
+        : "";
 
-    const res = await fetch(
-      `${BASE_URL}/api/orders/admin/summary-today`,
-      { cache: "no-store" }
-    );
+    const res = await fetch(`${BASE_URL}/api/orders/admin/summary-today`, {
+      cache: "no-store",
+    });
 
     if (!res.ok) throw new Error("Respuesta no válida del servidor");
 
     const data = await res.json();
 
-    // ⛔ evita rebote de requests viejos
+    // ✅ FIX 1: NO restar cancelaciones en el front si el backend ya manda auditoría PRO
+    const serverHasAudit =
+      data?.grossSales != null ||
+      data?.cancelledSales != null ||
+      data?.netSales != null;
+
+    if (!serverHasAudit) {
+      // (modo compatibilidad viejo)
+      const list = Array.isArray(recentOrdersRef.current) ? recentOrdersRef.current : [];
+
+      const cancelledToday = list
+        .filter((o) => o?.isCancelled && o?.isPaid)
+        .reduce((sum, o) => sum + Number(o?.total || 0), 0);
+
+      const cancelledCountToday = list
+        .filter((o) => o?.isCancelled && o?.isPaid).length;
+
+      data.cancelledSales = Number(cancelledToday.toFixed(2));
+      data.cancelledOrders = cancelledCountToday;
+
+      data.totalSales = Math.max(0, Number(data.totalSales || 0) - cancelledToday);
+      data.totalOrders = Math.max(0, Number(data.totalOrders || 0) - cancelledCountToday);
+    }
+
     if (reqId !== adminSummaryReqIdRef.current) return;
 
-    const uiSales = Math.max(0, data.totalSales - (baseline.sales || 0));
-    const uiOrders = Math.max(0, data.totalOrders - (baseline.orders || 0));
+    // ✅ Valores del server (PRO si existen)
+    const netFromServer = Number(data.netSales ?? data.totalSales ?? 0);
+    const ordersFromServer = Number(data.totalOrders ?? 0);
+    const grossFromServer = Number(data.grossSales ?? 0);
+    const cancelledFromServer = Number(data.cancelledSales ?? 0);
+
+    // ✅ FIX 2: baseline por turno a TODO
+    const uiSales = Math.max(0, netFromServer - Number(baseline.sales || 0));
+    const uiOrders = Math.max(0, ordersFromServer - Number(baseline.orders || 0));
+    const uiCancelledSales = Math.max(
+      0,
+      cancelledFromServer - Number(baseline.cancelledSales || 0)
+    );
+    const uiGrossSales = Math.max(
+      0,
+      grossFromServer - Number(baseline.grossSales || 0)
+    );
 
     const finalSummary = {
       ...data,
-      totalSales: uiSales,
-      totalOrders: uiOrders,
+      totalSales: uiSales,              // netas (turno)
+      totalOrders: uiOrders,            // pedidos (turno)
+      cancelledSales: uiCancelledSales, // cancelaciones (turno)
+      grossSales: uiGrossSales,         // brutas (turno)
     };
 
     setAdminSummary(finalSummary);
@@ -1304,6 +1783,26 @@ const [recentOrders, setRecentOrders] = useState([]);
 const [loadingOrders, setLoadingOrders] = useState(false);
 const [ordersError, setOrdersError] = useState("");
 const recentOrdersRef = useRef([]);
+
+// ✅ Persistencia local de cancelaciones (solo FRONT)
+const CANCELLED_ORDERS_KEY = "pos_cancelled_orders_v1";
+
+const readCancelledOrdersSet = () => {
+  try {
+    const raw = localStorage.getItem(CANCELLED_ORDERS_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return new Set((Array.isArray(arr) ? arr : []).map((x) => String(x)));
+  } catch {
+    return new Set();
+  }
+};
+
+const writeCancelledOrdersSet = (setObj) => {
+  try {
+    localStorage.setItem(CANCELLED_ORDERS_KEY, JSON.stringify([...setObj]));
+  } catch {}
+};
+
 
 const getOrderTableLabel = (order) => {
   if (!order) return "N/D";
@@ -1329,11 +1828,21 @@ const loadRecentOrders = async ({ silent = false } = {}) => {
     const data = await res.json();
     const list = Array.isArray(data) ? data.slice(0, 15) : [];
 
+// ✅ Si backend no manda isCancelled, lo completamos con lo guardado local
+const cancelledSet = readCancelledOrdersSet();
+const listFixed = list.map((o) => {
+  const id = o?.id ?? o?.orderId ?? o?._id;
+  const isCancelled = Boolean(o?.isCancelled) || cancelledSet.has(String(id));
+  return { ...o, isCancelled };
+});
+
+
     const prev = JSON.stringify(recentOrdersRef.current);
-    const next = JSON.stringify(list);
+   const next = JSON.stringify(listFixed);
+
     if (prev !== next) {
-      recentOrdersRef.current = list;
-      setRecentOrders(list);
+      recentOrdersRef.current = listFixed;
+setRecentOrders(listFixed);
     }
   } catch (err) {
     console.error(err);
@@ -1342,6 +1851,78 @@ const loadRecentOrders = async ({ silent = false } = {}) => {
     if (!silent) setLoadingOrders(false);
   }
 };
+
+
+// =======================
+// CANCELAR / ROLLBACK (venta cerrada)
+// =======================
+const handleCancelOrder = async (orderId, total = 0) => {
+
+  try {
+    if (!orderId) return;
+
+    const ok = window.confirm(
+      `¿Cancelar/rollback la venta #${orderId}?\n\nEsto REVERSA inventario (IN) y marca la orden como cancelada.\nNo borra historial.`
+    );
+    if (!ok) return;
+
+    const BASE_URL = (typeof API_URL !== "undefined" && API_URL) ? API_URL : "";
+
+    const res = await fetch(`${BASE_URL}/api/orders/cancel/${orderId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || "No se pudo cancelar la venta");
+
+// ✅ AJUSTE PRO BASELINE (para que no se te vaya a 350 después de cancelar)
+try {
+  const todayKey = new Date().toLocaleDateString("en-CA");
+  const raw = localStorage.getItem(SHIFT_BASELINE_KEY(todayKey));
+  const baseline = raw ? JSON.parse(raw) : { sales: 0, orders: 0 };
+
+  const cancelledAmount = Number(total || 0);
+ // 👈 si tienes o.total disponible
+  // Si NO tienes o.total aquí, usa el total que le llega a la función (te digo abajo)
+
+  const newBaseline = {
+    sales: Math.max(0, (baseline.sales || 0) - cancelledAmount),
+    orders: Math.max(0, (baseline.orders || 0) - 1),
+  };
+
+  localStorage.setItem(SHIFT_BASELINE_KEY(todayKey), JSON.stringify(newBaseline));
+} catch {}
+
+
+    alert(`✅ Venta cancelada: #${orderId}`);
+// ✅ Guarda en localStorage para que al recargar "Ventas" siga saliendo CANCELADA
+const s = readCancelledOrdersSet();
+s.add(String(orderId));
+writeCancelledOrdersSet(s);
+
+
+// ✅ UI inmediata: marca como cancelada en el historial aunque el backend no lo mande
+setRecentOrders((prev) =>
+  (Array.isArray(prev) ? prev : []).map((o) =>
+    String(o?.id) === String(orderId) ? { ...o, isCancelled: true } : o
+  )
+);
+
+
+    // refrescos seguros
+    Promise.allSettled([
+      loadRecentOrders(),
+      loadAdminSummary?.(),
+      loadInventoryOptions?.(),
+      loadLowStock?.(),
+    ]);
+  } catch (e) {
+    console.error(e);
+    alert(`❌ ${e?.message || "Error al cancelar"}`);
+  }
+};
+
 
   // =======================
   // INVENTARIO BAJO
@@ -1754,51 +2335,54 @@ async function handleCloseDay() {
   );
   if (!ok) return;
 
-// ✅ 0) Generar corte en backend (esto llena DailyReport)
-try {
-  const res = await fetch(`${API_URL}/api/reports/close-day`, { method: "POST" });
-  if (!res.ok) throw new Error("No se pudo generar el corte en el servidor");
-} catch (e) {
+  // ✅ FIX CRÍTICO: declarar BASE_URL UNA SOLA VEZ, antes de usarlo
+  const BASE_URL = import.meta.env.VITE_API_URL || "";
 
-  alert("⚠️ No se generó el corte en servidor. Revisa backend.\n" + (e.message || ""));
-  return; // ⛔ no limpies nada si no se guardó el corte
-}
+  // ✅ 0) Generar corte en backend (esto llena DailyReport)
+  try {
+    const res = await fetch(`${BASE_URL}/api/reports/close-day`, { method: "POST" });
 
+    if (!res.ok) throw new Error("No se pudo generar el corte en el servidor");
+  } catch (e) {
+    alert(
+      "⚠️ No se generó el corte en servidor. Revisa backend.\n" + (e.message || "")
+    );
+    return; // ⛔ no limpies nada si no se guardó el corte
+  }
 
   const todayKey = new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD local
 
   try {
-    // 1) Traer resumen real DEL DÍA (antes del corte)
-  b
+   // 1) Traer resumen real DEL DÍA (antes del corte)
+const resSum = await fetch(`${BASE_URL}/api/orders/admin/summary-today`, { cache: "no-store" });
+if (!resSum.ok) throw new Error("No se pudo leer resumen para cierre");
 
-    if (!res.ok) throw new Error("No se pudo leer resumen para cierre");
+// ✅ FIX: el JSON viene de resSum (no de "res")
+const data = await resSum.json();
+const backendSales = Number(data?.totalSales || 0);
+const backendOrders = Number(data?.totalOrders || 0);
 
-    const data = await res.json();
-    const backendSales = Number(data?.totalSales || 0);
-    const backendOrders = Number(data?.totalOrders || 0);
+// 2) Guardar baseline (shift) = “hasta aquí quedó el día”
+localStorage.setItem(
+  SHIFT_BASELINE_KEY(todayKey),
+  JSON.stringify({
+    sales: backendSales,                 // netas (como ya lo tienes)
+    orders: backendOrders,
+    grossSales: Number(data?.grossSales || 0),           // ✅ nuevo
+    cancelledSales: Number(data?.cancelledSales || 0),   // ✅ nuevo
+    closedAt: new Date().toISOString(),
+  })
+);
 
-    // 2) Guardar baseline (shift) = “hasta aquí quedó el día”
-    localStorage.setItem(
-      SHIFT_BASELINE_KEY(todayKey),
-      JSON.stringify({
-        sales: backendSales,
-        orders: backendOrders,
-        closedAt: new Date().toISOString(),
-      })
-    );
+// 3) Limpiar caja del día (por key del día)
+localStorage.removeItem(CASH_MOVES_KEY(todayKey));
+setCashMoves([]);
+setCashCount("");
 
-    // 3) Limpiar caja del día (por key del día)
-    localStorage.removeItem(CASH_MOVES_KEY(todayKey));
-    setCashMoves([]);
-    setCashCount("");
+// ✅ CIERRE DE DÍA: NO LLAMAR /api/orders/close-day
+// Ese endpoint es de órdenes y hoy está fallando en backend.
+// El corte real ya se guardó con /api/reports/close-day.
 
-    // 4) (Opcional) endpoint de cierre
-try {
-  await fetch(
-    `${import.meta.env.VITE_API_URL}/api/orders/close-day`,
-    { method: "POST" }
-  );
-} catch {}
 
 
     // 5) Refrescar resumen (ya debe dar 0/0 por baseline)
@@ -1828,6 +2412,24 @@ useEffect(() => {
     setActiveTab("mesas");
   }
 }, [isAdmin]);
+
+
+
+const loadRecipeOptions = async () => {
+  try {
+    const BASE_URL = typeof API_URL !== "undefined" && API_URL ? API_URL : "";
+    const res = await fetch(`${BASE_URL}/api/menu-recipes`, { cache: "no-store" });
+    if (!res.ok) return;
+    const data = await res.json();
+    setRecipeOptions(Array.isArray(data) ? data : []);
+  } catch {}
+};
+
+const MAX_EXTRAS = 2;
+const MIN_EXTRAS = 1; // ← si NO quieres obligatorio, pon 0
+
+
+
 
 
   // =======================
@@ -2164,6 +2766,23 @@ if (!isTurnoAbierto()) {
                   }),
                 }
               );
+
+// 🖨️ Imprimir ticket (si existe printTicket / QZ listo)
+try {
+  const currentOrder = ordersByTable[selectedTable.id] || { items: [] };
+
+  // ✅ IMPORTANTE: aquí llama TU función real de impresión
+  // (la que ya usas en "Imprimir prueba" / QZ Tray)
+  await printTicket({
+    table: selectedTable,
+    items: currentOrder.items,
+    paymentMethod: closePaymentMethod,
+    paymentRef: closePaymentRef,
+  });
+} catch (e) {
+  console.warn("printTicket falló:", e);
+}
+
 
               alert("✅ Cuenta cerrada");
 setOpenTableIds((prev) => {
@@ -2520,21 +3139,57 @@ setOpenTableIds((prev) => {
                     gap: 10,
                   }}
                 >
-                  <div
-                    style={{
-                      padding: 12,
-                      borderRadius: 14,
-                      border: "1px solid rgba(148,163,184,0.35)",
-                      backgroundColor: "rgba(2,6,23,0.35)",
-                    }}
-                  >
-                    <p style={{ fontSize: 12, opacity: 0.8, marginBottom: 4 }}>
-                      Ventas acumuladas
-                    </p>
-                    <p style={{ fontSize: 22, fontWeight: 900, margin: 0 }}>
-                      {fmtMoney(adminSummary.totalSales)}
-                    </p>
-                  </div>
+{/* Ventas netas */}
+<div
+  style={{
+    padding: 12,
+    borderRadius: 14,
+    border: "1px solid rgba(148,163,184,0.35)",
+    backgroundColor: "rgba(2,6,23,0.35)",
+  }}
+>
+  <p style={{ fontSize: 12, opacity: 0.8, marginBottom: 4 }}>
+    Ventas netas
+  </p>
+  <p style={{ fontSize: 22, fontWeight: 900, margin: 0 }}>
+    {fmtMoney(Number(adminSummary.totalSales || 0))}
+  </p>
+</div>
+
+{/* Ventas brutas */}
+<div
+  style={{
+    padding: 12,
+    borderRadius: 14,
+    border: "1px solid rgba(148,163,184,0.35)",
+    backgroundColor: "rgba(2,6,23,0.35)",
+  }}
+>
+  <p style={{ fontSize: 12, opacity: 0.8, marginBottom: 4 }}>
+    Ventas brutas
+  </p>
+  <p style={{ fontSize: 22, fontWeight: 900, margin: 0 }}>
+    {fmtMoney(Number(adminSummary.grossSales || 0))}
+  </p>
+</div>
+
+{/* Cancelaciones */}
+<div
+  style={{
+    padding: 12,
+    borderRadius: 14,
+    border: "1px solid rgba(239,68,68,0.35)",
+    backgroundColor: "rgba(239,68,68,0.08)",
+  }}
+>
+  <p style={{ fontSize: 12, opacity: 0.85, marginBottom: 4 }}>
+    Cancelaciones
+  </p>
+  <p style={{ fontSize: 22, fontWeight: 900, margin: 0, color: "#fecaca" }}>
+    {fmtMoney(Number(adminSummary.cancelledSales || 0))}
+  </p>
+</div>
+
 
                   <div
                     style={{
@@ -2657,6 +3312,10 @@ setOpenTableIds((prev) => {
                 <p style={{ fontSize: 12, opacity: 0.8, margin: 0 }}>
                   Selecciona una mesa para comenzar un pedido.
                 </p>
+<div style={{ fontSize: 11, opacity: 0.75, marginTop: 4 }}>
+  🖨️ Impresora: <b>{printerName ? printerName : "No configurada"}</b>
+</div>
+
 
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   <button
@@ -3142,6 +3801,27 @@ setOpenTableIds((prev) => {
                                 {fmtMoney(item.price)} x {item.qty}
                               </div>
                             </div>
+/* ✅ EXTRAS (para cocina) */}
+{Array.isArray(item.extras) && item.extras.length > 0 && (
+  <div style={{ marginTop: 6, display: "grid", gap: 2 }}>
+    {item.extras.map((ex) => (
+      <div
+        key={ex.id || ex.name}
+        style={{ fontSize: 11, opacity: 0.9, fontWeight: 700 }}
+      >
+        • {ex.name} ({fmtMoney(ex.price)})
+      </div>
+    ))}
+  </div>
+)}
+
+{/* ✅ NOTA (para cocina) */}
+{String(item.note || "").trim() && (
+  <div style={{ marginTop: 6, fontSize: 11, opacity: 0.85 }}>
+    <span style={{ fontWeight: 900 }}>Nota:</span> {String(item.note).trim()}
+  </div>
+)}
+
 
                             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                               <button
@@ -3334,11 +4014,18 @@ const noStock = inv !== null && Number.isFinite(stockVal) && stockVal <= 0;
     key={p.id}
     type="button"
     onClick={() => {
-      if (noStock) {
-        alert("⛔ Producto sin stock disponible");
-        return;
-      }
-      handleQuickProductClick(p);
+  if (noStock) {
+    alert("⛔ Producto sin stock disponible");
+    return;
+  }
+
+
+
+  // ✅ Si NO permite extras → agrega directo (tu lógica normal)
+  handleQuickProductClick(p);
+
+
+
     }}
     style={{
       textAlign: "left",
@@ -3410,6 +4097,268 @@ boxShadow: noStock ? "none" : `0 0 0 1px ${catColor}40`,
 )}
 
            
+{showExtrasEditor && (
+  <div
+    style={{
+      position: "fixed",
+      inset: 0,
+      background: "rgba(2,6,23,0.82)",
+      zIndex: 10000,
+      display: "grid",
+      placeItems: "center",
+      padding: 16,
+    }}
+  >
+    <div
+      style={{
+        width: "min(560px, 96vw)",
+        background:
+          "radial-gradient(circle at top left, rgba(30,41,59,0.92), rgba(15,23,42,0.98))",
+        border: "1px solid rgba(148,163,184,0.22)",
+        borderRadius: 18,
+        padding: 16,
+        color: "var(--pos-text, #e5e7eb)",
+        boxShadow: "0 24px 80px rgba(0,0,0,0.50)",
+      }}
+    >
+      {/* HEADER */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "flex-start",
+          gap: 12,
+          paddingBottom: 12,
+          borderBottom: "1px solid rgba(148,163,184,0.18)",
+          marginBottom: 12,
+        }}
+      >
+        <div>
+          <div style={{ fontWeight: 1000, fontSize: 16, letterSpacing: 0.2 }}>
+            Catálogo de extras
+          </div>
+          <div style={{ fontSize: 12, opacity: 0.82, marginTop: 4 }}>
+            Agrega extras una vez y luego asígnalos a cada platillo con checks.
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setShowExtrasEditor(false)}
+          style={{
+            borderRadius: 999,
+            border: "1px solid rgba(148,163,184,0.35)",
+            background: "rgba(2,6,23,0.28)",
+            color: "var(--pos-text, #e5e7eb)",
+            padding: "8px 12px",
+            cursor: "pointer",
+            fontWeight: 900,
+            height: 36,
+            whiteSpace: "nowrap",
+          }}
+        >
+          Cerrar
+        </button>
+      </div>
+
+      {/* LISTA */}
+      <div
+        style={{
+          display: "grid",
+          gap: 10,
+          maxHeight: "36vh",
+          overflow: "auto",
+          paddingRight: 2,
+        }}
+      >
+        {extrasCatalog.length === 0 ? (
+          <div
+            style={{
+              border: "1px dashed rgba(148,163,184,0.25)",
+              background: "rgba(2,6,23,0.20)",
+              borderRadius: 14,
+              padding: 12,
+              fontSize: 12,
+              opacity: 0.85,
+            }}
+          >
+            Aún no tienes extras. Agrega el primero abajo.
+          </div>
+        ) : (
+          extrasCatalog.map((e, idx) => (
+            <div
+              key={e.id}
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 10,
+                padding: "10px 12px",
+                borderRadius: 14,
+                border: "1px solid rgba(148,163,184,0.18)",
+                background: "rgba(2,6,23,0.22)",
+              }}
+            >
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 900, fontSize: 13, lineHeight: 1.2 }}>
+                  {e.name}{" "}
+                  <span style={{ opacity: 0.75, fontWeight: 800 }}>
+                    • {e.appliesTo}
+                  </span>
+                </div>
+                <div style={{ fontSize: 12, opacity: 0.85, marginTop: 4 }}>
+                  ${Number(e.price || 0).toFixed(2)}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() =>
+                  saveExtrasCatalog(extrasCatalog.filter((_, i) => i !== idx))
+                }
+                title="Eliminar"
+                style={{
+                  width: 34,
+                  height: 34,
+                  borderRadius: 10,
+                  border: "1px solid rgba(239,68,68,0.55)",
+                  background: "rgba(239,68,68,0.12)",
+                  color: "#fecaca",
+                  cursor: "pointer",
+                  fontWeight: 1000,
+                  flexShrink: 0,
+                }}
+              >
+                ✕
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* FORM */}
+      <div
+        style={{
+          marginTop: 12,
+          paddingTop: 12,
+          borderTop: "1px solid rgba(148,163,184,0.18)",
+          display: "grid",
+          gap: 10,
+        }}
+      >
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr 140px",
+            gap: 10,
+          }}
+        >
+          <input
+            placeholder="Nombre del extra"
+            value={newExtra.name}
+            onChange={(e) => setNewExtra({ ...newExtra, name: e.target.value })}
+            style={{
+              width: "100%",
+              minWidth: 0,
+              padding: "10px 12px",
+              borderRadius: 12,
+              border: "1px solid rgba(148,163,184,0.25)",
+              background: "rgba(2,6,23,0.25)",
+              color: "var(--pos-text, #e5e7eb)",
+              fontWeight: 800,
+              outline: "none",
+              height: 40,
+              boxSizing: "border-box",
+            }}
+          />
+
+          <input
+            type="number"
+            placeholder="Precio"
+            value={newExtra.price}
+            onChange={(e) => setNewExtra({ ...newExtra, price: e.target.value })}
+            style={{
+              width: "100%",
+              minWidth: 0,
+              padding: "10px 12px",
+              borderRadius: 12,
+              border: "1px solid rgba(148,163,184,0.25)",
+              background: "rgba(2,6,23,0.25)",
+              color: "var(--pos-text, #e5e7eb)",
+              fontWeight: 900,
+              outline: "none",
+              height: 40,
+              boxSizing: "border-box",
+            }}
+          />
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr auto",
+            gap: 10,
+            alignItems: "center",
+          }}
+        >
+          <select
+            value={newExtra.appliesTo}
+            onChange={(e) =>
+              setNewExtra({ ...newExtra, appliesTo: e.target.value })
+            }
+            style={{
+              width: "100%",
+              minWidth: 0,
+              padding: "10px 12px",
+              borderRadius: 12,
+              border: "1px solid rgba(148,163,184,0.25)",
+              background: "rgba(2,6,23,0.25)",
+              color: "var(--pos-text, #e5e7eb)",
+              fontWeight: 900,
+              outline: "none",
+              height: 40,
+              boxSizing: "border-box",
+            }}
+          >
+            <option value="Comida">Comida</option>
+            <option value="Bebidas">Bebidas</option>
+          </select>
+
+          <button
+            type="button"
+            onClick={() => {
+              if (!newExtra.name || !newExtra.price) return;
+              saveExtrasCatalog([
+                ...extrasCatalog,
+                {
+                  id: "extra-" + Date.now(),
+                  name: newExtra.name,
+                  price: Number(newExtra.price),
+                  appliesTo: newExtra.appliesTo,
+                },
+              ]);
+              setNewExtra({ name: "", price: "", appliesTo: "Comida" });
+            }}
+            style={{
+              borderRadius: 999,
+              border: "1px solid rgba(34,197,94,0.75)",
+              background: "rgba(22,163,74,0.14)",
+              color: "#bbf7d0",
+              padding: "10px 14px",
+              cursor: "pointer",
+              fontWeight: 1000,
+              height: 40,
+              whiteSpace: "nowrap",
+            }}
+          >
+            + Agregar extra
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+)}
+
 
 
 {showMenuEditor && (
@@ -3544,7 +4493,8 @@ boxShadow: noStock ? "none" : `0 0 0 1px ${catColor}40`,
               style={{
                 display: "grid",
                 gridTemplateColumns:
-                  "120px minmax(230px,1fr) 220px minmax(170px,1fr) 90px 220px 190px 52px",
+   "110px 240px 190px 260px 90px 170px 190px 160px 210px 210px 52px",
+
                 gap: 10,
                 alignItems: "center",
                 padding: "10px 10px",
@@ -3556,21 +4506,12 @@ boxShadow: noStock ? "none" : `0 0 0 1px ${catColor}40`,
               }}
             >
               {/* SECCIÓN */}
-              <select
-                value={p.section || "Comida"}
-                onChange={(e) => handleMenuFieldChange(p.id, "section", e.target.value)}
-                style={{
-                  width: "100%",
-                  minWidth: 0,
-                  padding: "8px 10px",
-                  borderRadius: 12,
-                  border: "1px solid rgba(75,85,99,0.9)",
-                  backgroundColor: "rgba(15,23,42,0.96)",
-                  color: "var(--pos-text, #e5e7eb)",
-                  fontSize: 11,
-                  fontWeight: 800,
-                }}
-              >
+ <select
+  value={p.section || "Comida"}
+  onChange={(e) => handleMenuFieldChange(p.id, "section", e.target.value)}
+  style={editorSelectStyle}
+>
+
                 {menuSections.map((sec) => (
                   <option key={sec} value={sec}>
                     {sec}
@@ -3584,39 +4525,15 @@ boxShadow: noStock ? "none" : `0 0 0 1px ${catColor}40`,
                 onDoubleClick={(e) => e.target.select()}
                 placeholder="Nombre"
                 onChange={(e) => handleMenuFieldChange(p.id, "name", e.target.value)}
-                style={{
-                  width: "100",
-                  minWidth: 0,
-                  width: "100%",
-                  padding: "8px 10px",
-                  borderRadius: 13,
-                  border: "1px solid rgba(75,85,99,0.9)",
-                  backgroundColor: "rgba(15,23,42,0.96)",
-                  color: "var(--pos-text, #e5e7eb)",
-                  fontSize: 11,
-                  fontWeight: 800,
-                }}
+               style={editorSelectStyle}
+
               />
 
               {/* FOTO (compacta) - en edición NO se muestra preview para que no ocupe espacio */}
 <div style={{ display: "flex", gap: 10, alignItems: "center", minWidth: 0 }}>
   <details style={{ minWidth: 0, width: "100%" }}>
     <summary
-      style={{
-        cursor: "pointer",
-        fontSize: 11,
-        fontWeight: 900,
-        opacity: 0.9,
-        listStyle: "none",
-        userSelect: "none",
-        padding: "8px 10px",
-        borderRadius: 999,
-        border: "1px solid rgba(148,163,184,0.35)",
-        background: "rgba(2,6,23,0.28)",
-        whiteSpace: "nowrap",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-      }}
+ style={editorSelectStyle}
     >
       Foto <span style={{ fontSize: 10, opacity: 0.65 }}>(URL o subir)</span>
     </summary>
@@ -3690,21 +4607,13 @@ boxShadow: noStock ? "none" : `0 0 0 1px ${catColor}40`,
 </div>
 
 
+
               {/* CATEGORÍA/OPCIONES */}
               <input
                 value={p.category || ""}
                 placeholder="Categoría (o opciones separadas por coma)"
                 onChange={(e) => handleMenuFieldChange(p.id, "category", e.target.value)}
-                style={{
-                  width: "100%",
-                  minWidth: 0,
-                  padding: "8px 10px",
-                  borderRadius: 12,
-                  border: "1px solid rgba(75,85,99,0.9)",
-                  backgroundColor: "rgba(15,23,42,0.96)",
-                  color: "var(--pos-text, #e5e7eb)",
-                  fontSize: 11,
-                }}
+              style={editorSelectStyle}
               />
 
               {/* PRECIO BASE */}
@@ -3713,16 +4622,7 @@ boxShadow: noStock ? "none" : `0 0 0 1px ${catColor}40`,
                 value={p.price || 0}
                 placeholder="Precio"
                 onChange={(e) => handleMenuFieldChange(p.id, "price", e.target.value)}
-                style={{
-                  width: "100%",
-                  minWidth: 0,
-                  padding: "8px 10px",
-                  borderRadius: 12,
-                  border: "1px solid rgba(75,85,99,0.9)",
-                  backgroundColor: "rgba(15,23,42,0.96)",
-                  color: "var(--pos-text, #e5e7eb)",
-                  fontSize: 11,
-                }}
+                style={editorSelectStyle}
               />
 
            {/* TAMAÑOS (compacto PRO: botón toggle + panel ABAJO en 2 filas) */}
@@ -3858,6 +4758,125 @@ boxShadow: noStock ? "none" : `0 0 0 1px ${catColor}40`,
   </div>
 </details>
 
+<select
+  value={p.menuRecipeId || ""}
+  onChange={(e) => {
+    const val = e.target.value ? Number(e.target.value) : null;
+
+    // ✅ si eliges receta, opcionalmente limpiamos inventoryItemId para evitar confusión
+    handleMenuFieldChange(p.id, "menuRecipeId", val);
+    if (val) handleMenuFieldChange(p.id, "inventoryItemId", null);
+  }}
+  style={editorSelectStyle}
+
+
+>
+  <option value="">(Sin receta)</option>
+  {recipeOptions.map((r) => (
+    <option key={r.id} value={r.id}>
+      {r.name}
+    </option>
+  ))}
+</select>
+
+
+<select
+  value={p.allowExtras ? "yes" : "no"}
+  onChange={(e) =>
+    handleMenuFieldChange(p.id, "allowExtras", e.target.value === "yes")
+  }
+  style={editorSelectStyle}
+>
+
+  <option value="no">Sin extras</option>
+  <option value="yes">Con extras</option>
+</select>
+
+{p?.allowExtras && (
+  <div
+    style={{
+      display: "grid",
+      gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
+      gap: 8,
+      padding: 10,
+      borderRadius: 12,
+      border: "1px solid rgba(148,163,184,0.25)",
+      background: "rgba(2,6,23,0.35)",
+    }}
+  >
+    {(extrasCatalog || []).map((extra) => {
+      const checked = Array.isArray(p.extrasIds)
+        ? p.extrasIds.includes(extra.id)
+        : false;
+
+      return (
+        <label
+          key={extra.id}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            fontSize: 11,
+            cursor: "pointer",
+            opacity:
+              extra.appliesTo &&
+              p.section &&
+              extra.appliesTo !== p.section
+                ? 0.4
+                : 1,
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={checked}
+            onChange={(e) => {
+              const current = Array.isArray(p.extrasIds)
+                ? p.extrasIds
+                : [];
+
+              const next = e.target.checked
+                ? [...current, extra.id]
+                : current.filter((id) => id !== extra.id);
+
+              handleMenuFieldChange(p.id, "extrasIds", next);
+            }}
+          />
+          <span>
+            {extra.name} (+${Number(extra.price || 0)})
+          </span>
+        </label>
+      );
+    })}
+  </div>
+)}
+
+
+<button
+  type="button"
+  onClick={() => setShowExtrasEditor(true)}
+  style={{
+    width: "100%",
+    minWidth: 0,
+    height: 40,
+    padding: "8px 12px",
+    borderRadius: 999,
+    border: "1px solid rgba(148,163,184,0.35)",
+    background: "rgba(2,6,23,0.28)",
+    color: "var(--pos-text, #e5e7eb)",
+    fontSize: 11,
+    fontWeight: 900,
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    boxSizing: "border-box",
+  }}
+>
+  Editar catálogo de extras
+</button>
+
+
+
               {/* INVENTARIO */}
               <select
                 value={p.inventoryItemId ?? ""}
@@ -3871,6 +4890,8 @@ boxShadow: noStock ? "none" : `0 0 0 1px ${catColor}40`,
                   backgroundColor: "rgba(15,23,42,0.96)",
                   color: "var(--pos-text, #e5e7eb)",
                   fontSize: 11,
+boxSizing: "border-box",
+height: 40,
                 }}
               >
                 <option value="">(Sin inventario)</option>
@@ -3911,6 +4932,7 @@ boxShadow: noStock ? "none" : `0 0 0 1px ${catColor}40`,
     </div>
   </div>
 )}
+
 
 
 {quickPickOpen && (
@@ -4080,6 +5102,182 @@ boxShadow: noStock ? "none" : `0 0 0 1px ${catColor}40`,
 )}
 
 
+
+
+{extrasOpen && (
+  <div
+    style={{
+      position: "fixed",
+      inset: 0,
+      zIndex: 10000,
+      background: "rgba(2,6,23,0.82)",
+      display: "grid",
+      placeItems: "center",
+      padding: 16,
+    }}
+  >
+    <div
+      style={{
+        width: "min(720px, 96vw)",
+        borderRadius: 18,
+        padding: 16,
+        border: "1px solid rgba(148,163,184,0.22)",
+        background:
+          "radial-gradient(circle at top left, rgba(30,41,59,0.92), rgba(15,23,42,0.98))",
+        boxShadow: "0 24px 80px rgba(0,0,0,0.50)",
+        color: "var(--pos-text, #e5e7eb)",
+      }}
+    >
+      {/* HEADER */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 12,
+          alignItems: "flex-start",
+          padding: "6px 6px 12px",
+          borderBottom: "1px solid rgba(148,163,184,0.18)",
+          marginBottom: 12,
+        }}
+      >
+        <div>
+          <div style={{ fontWeight: 1000, fontSize: 16, letterSpacing: 0.2 }}>
+            Extras para: {extrasProduct?.name || "Producto"}
+          </div>
+          <div style={{ fontSize: 12, opacity: 0.82, marginTop: 4 }}>
+            Selecciona extras y confirma
+          </div>
+        </div>
+
+        <button
+          onClick={() => {
+            setExtrasOpen(false);
+            setExtrasProduct(null);
+            setExtrasSelected([]);
+          }}
+          style={{
+            borderRadius: 999,
+            border: "1px solid rgba(148,163,184,0.35)",
+            background: "rgba(2,6,23,0.28)",
+            color: "var(--pos-text, #e5e7eb)",
+            padding: "8px 12px",
+            cursor: "pointer",
+            fontWeight: 900,
+            height: 36,
+            whiteSpace: "nowrap",
+          }}
+        >
+          Cerrar
+        </button>
+      </div>
+
+      {/* LISTA */}
+      <div
+        style={{
+          marginTop: 8,
+          display: "grid",
+          gap: 10,
+          maxHeight: "52vh",
+          overflow: "auto",
+          paddingRight: 2,
+        }}
+      >
+        {(visibleExtras || []).map((e) => {
+          const active = extrasSelected.some((x) => x.id === e.id);
+          return (
+            <button
+              key={e.id}
+              onClick={() => toggleExtra(e)}
+              style={{
+                textAlign: "left",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 10,
+                padding: "12px 12px",
+                borderRadius: 14,
+                border: active
+                  ? "1px solid rgba(34,197,94,0.75)"
+                  : "1px solid rgba(148,163,184,0.22)",
+                background: active
+                  ? "rgba(34,197,94,0.14)"
+                  : "rgba(2,6,23,0.22)",
+                color: "var(--pos-text, #e5e7eb)",
+                cursor: "pointer",
+                boxShadow: active ? "0 10px 30px rgba(0,0,0,0.18)" : "none",
+              }}
+            >
+              <span style={{ fontWeight: 900, fontSize: 13 }}>
+                {e.name}
+                <span style={{ fontSize: 11, opacity: 0.75, marginLeft: 8 }}>
+                  {String(e.appliesTo || "") ? `• ${e.appliesTo}` : ""}
+                </span>
+              </span>
+
+              <span style={{ fontWeight: 1000, fontSize: 13 }}>
+                {fmtMoney(e.price)}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+
+
+      {/* FOOTER */}
+      <div
+        style={{
+          marginTop: 14,
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 10,
+          flexWrap: "wrap",
+          paddingTop: 12,
+          borderTop: "1px solid rgba(148,163,184,0.18)",
+        }}
+      >
+        <div style={{ fontWeight: 1000 }}>
+          Extras: {fmtMoney(calcExtrasTotal(extrasSelected))}
+        </div>
+
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button
+            onClick={addWithoutExtras}
+            style={{
+              borderRadius: 999,
+              border: "1px solid rgba(148,163,184,0.35)",
+              background: "rgba(2,6,23,0.28)",
+              color: "var(--pos-text, #e5e7eb)",
+              padding: "10px 14px",
+              cursor: "pointer",
+              fontWeight: 1000,
+              height: 40,
+              whiteSpace: "nowrap",
+            }}
+          >
+            Sin extras
+          </button>
+
+          <button
+  onClick={() => {
+    if (extrasSelected.length < MIN_EXTRAS) {
+      alert(`Debes elegir al menos ${MIN_EXTRAS} extra`);
+      return;
+    }
+    addWithExtras();
+  }}
+>
+  Agregar con extras
+</button>
+
+        </div>
+      </div>
+    </div>
+  </div>
+)}
+
+
               {/* Tabs para mesero */}
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
                 {menuSections.map((sec) => {
@@ -4144,119 +5342,197 @@ boxShadow: noStock ? "none" : `0 0 0 1px ${catColor}40`,
           </>
         )}
 
-        {/* ===== VENTAS (simple, funcional) ===== */}
-        {activeTab === "ventas" && (
-          <Accordion title="Ventas (tiempo real)" defaultOpen={true}>
+       {/* ===== VENTAS (simple, funcional) ===== */}
+{activeTab === "ventas" && (
+  <Accordion title="Ventas (tiempo real)" defaultOpen={true}>
+    <Section title="Pedidos recientes">
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+        <button
+          onClick={() => loadRecentOrders()}
+          style={{
+            padding: "8px 12px",
+            borderRadius: 999,
+            border: "1px solid rgba(148,163,184,0.6)",
+            backgroundColor: "rgba(15,23,42,0.9)",
+            color: "var(--pos-text, #e5e7eb)",
+            fontSize: 12,
+            cursor: "pointer",
+            fontWeight: 900,
+          }}
+        >
+          Actualizar pedidos
+        </button>
 
-            <Section title="Pedidos recientes">
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
-                <button
-                  onClick={() => loadRecentOrders()}
-                  style={{
-                    padding: "8px 12px",
-                    borderRadius: 999,
-                    border: "1px solid rgba(148,163,184,0.6)",
-                    backgroundColor: "rgba(15,23,42,0.9)",
-                    color: "var(--pos-text, #e5e7eb)",
-                    fontSize: 12,
-                    cursor: "pointer",
-                    fontWeight: 900,
-                  }}
-                >
-                  Actualizar pedidos
-                </button>
+        <button
+          onClick={() => loadAdminSummary()}
+          style={{
+            padding: "8px 12px",
+            borderRadius: 999,
+            border: "1px solid rgba(34,197,94,0.8)",
+            background: "rgba(34,197,94,0.12)",
+            color: "#bbf7d0",
+            fontSize: 12,
+            cursor: "pointer",
+            fontWeight: 900,
+          }}
+        >
+          Actualizar resumen
+        </button>
+      </div>
 
-                <button
-                  onClick={() => loadAdminSummary()}
-                  style={{
-                    padding: "8px 12px",
-                    borderRadius: 999,
-                    border: "1px solid rgba(34,197,94,0.8)",
-                    background: "rgba(34,197,94,0.12)",
-                    color: "#bbf7d0",
-                    fontSize: 12,
-                    cursor: "pointer",
-                    fontWeight: 900,
-                  }}
-                >
-                  Actualizar resumen
-                </button>
-              </div>
+      {loadingOrders && <p style={{ fontSize: 12, opacity: 0.8 }}>Cargando…</p>}
+      {!!ordersError && <p style={{ fontSize: 12, color: "#fecaca" }}>{ordersError}</p>}
 
-              {loadingOrders && <p style={{ fontSize: 12, opacity: 0.8 }}>Cargando…</p>}
-              {!!ordersError && <p style={{ fontSize: 12, color: "#fecaca" }}>{ordersError}</p>}
+      {!loadingOrders && (!recentOrders || recentOrders.length === 0) ? (
+        <p style={{ fontSize: 12, opacity: 0.75 }}>Aún no hay pedidos.</p>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {recentOrders.map((o) => {
+            const whenRaw = o.createdAt || o.date || o.fecha || o.timestamp;
+            let when = "";
+            try {
+              if (whenRaw) when = new Date(whenRaw).toLocaleString("es-MX", { hour12: false });
+            } catch {
+              when = String(whenRaw || "");
+            }
 
-              {!loadingOrders && (!recentOrders || recentOrders.length === 0) ? (
-                <p style={{ fontSize: 12, opacity: 0.75 }}>Aún no hay pedidos.</p>
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  {recentOrders.map((o) => {
-                    const whenRaw = o.createdAt || o.date || o.fecha || o.timestamp;
-                    let when = "";
-                    try {
-                      if (whenRaw) when = new Date(whenRaw).toLocaleString("es-MX", { hour12: false });
-                    } catch {
-                      when = String(whenRaw || "");
-                    }
+            const tableLabel = getOrderTableLabel(o);
+            const total = Number(o.total || o.totalAmount || 0);
+// ✅ Compatibilidad: si el backend usa otro nombre, igual la detectamos
+const isCancelled =
+  Boolean(o?.isCancelled) ||
+  Boolean(o?.isCanceled) ||
+  Boolean(o?.cancelledAt) ||
+  Boolean(o?.rollbackAt) ||
+  String(o?.status || "").toUpperCase() === "CANCELLED";
 
-                    const tableLabel = getOrderTableLabel(o);
-                    const total = Number(o.total || o.totalAmount || 0);
 
-                    return (
-                      <div
-                        key={o.id || `${tableLabel}-${when}`}
-                        style={{
-                          borderRadius: 14,
-                          border: "1px solid rgba(148,163,184,0.30)",
-                          backgroundColor: "rgba(2,6,23,0.25)",
-                          padding: 12,
-                        }}
-                      >
-                        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-                          <div>
-                            <div style={{ fontWeight: 1000 }}>{tableLabel}</div>
-                            <div style={{ fontSize: 11, opacity: 0.75 }}>{when || "Sin fecha"}</div>
-                          </div>
-                          <div style={{ fontWeight: 1000 }}>{fmtMoney(total)}</div>
-                        </div>
+            return (
+              <div
+                key={o.id || `${tableLabel}-${when}`}
+                style={{
+                  borderRadius: 14,
+                  border: "1px solid rgba(148,163,184,0.30)",
+                  backgroundColor: "rgba(2,6,23,0.25)",
+                  padding: 12,
+                  opacity: o.isCancelled ? 0.75 : 1,
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                  <div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <div style={{ fontWeight: 1000 }}>{tableLabel}</div>
 
-                        <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
-                          {(Array.isArray(o.items) ? o.items : []).map((it, idx) => (
-                            <div
-                              key={`${o.id || "o"}-${idx}`}
-                              style={{
-                                display: "flex",
-                                justifyContent: "space-between",
-                                gap: 8,
-                                fontSize: 12,
-                                padding: "6px 8px",
-                                borderRadius: 10,
-                                border: "1px solid rgba(148,163,184,0.18)",
-                                backgroundColor: "rgba(15,23,42,0.55)",
-                              }}
-                            >
-                              <span style={{ opacity: 0.95 }}>
-                                {it.name} <span style={{ opacity: 0.75 }}>x {Number(it.qty || 1)}</span>
-                              </span>
-                              <span style={{ opacity: 0.9 }}>
-                                {fmtMoney(Number(it.price || 0) * Number(it.qty || 1))}
-                              </span>
-                            </div>
-                          ))}
-                          {(!o.items || o.items.length === 0) && (
-                            <p style={{ fontSize: 12, opacity: 0.75, margin: 0 }}>
-                              (Este pedido no trae items en el response)
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
+                      {/* ✅ badge opcional (si tu backend lo manda) */}
+                      {o.isCancelled && (
+                        <span
+                          style={{
+                            fontSize: 11,
+                            fontWeight: 900,
+                            padding: "4px 10px",
+                            borderRadius: 999,
+                            border: "1px solid rgba(239,68,68,0.70)",
+                            background: "rgba(239,68,68,0.14)",
+                            color: "#fecaca",
+                          }}
+                        >
+                          CANCELADA
+                        </span>
+                      )}
+                    </div>
+
+                    <div style={{ fontSize: 11, opacity: 0.75 }}>{when || "Sin fecha"}</div>
+                  </div>
+
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                    <div style={{ fontWeight: 1000 }}>{fmtMoney(total)}</div>
+
+{isCancelled && (
+  <span
+    style={{
+      padding: "2px 8px",
+      borderRadius: 999,
+      fontSize: 11,
+      fontWeight: 900,
+      color: "#fecaca",
+      border: "1px solid rgba(239,68,68,0.6)",
+      background: "rgba(239,68,68,0.15)",
+      marginLeft: 8,
+      whiteSpace: "nowrap",
+    }}
+  >
+    CANCELADA
+  </span>
+)}
+
+
+                    {/* ✅ BOTÓN CANCELAR (solo admin + solo ventas pagadas + no cancelada) */}
+                    {isAdmin && Boolean(o.isPaid) && !isCancelled && (
+  <button
+    type="button"
+    onClick={() => handleCancelOrder(o.id, Number(o.total || 0))}
+
+    style={{
+      padding: "8px 12px",
+      borderRadius: 999,
+      border: "1px solid rgba(239,68,68,0.85)",
+      background: "rgba(239,68,68,0.12)",
+      color: "#fecaca",
+      fontSize: 12,
+      cursor: "pointer",
+      fontWeight: 900,
+      whiteSpace: "nowrap",
+    }}
+    title="Cancela la venta y revierte inventario"
+  >
+    Cancelar
+  </button>
+                    )}
+                  </div>
                 </div>
-              )}
-            </Section>
-          </Accordion>
-        )}
+
+
+
+                <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+                  {(Array.isArray(o.items) ? o.items : []).map((it, idx) => (
+                    <div
+                      key={`${o.id || "o"}-${idx}`}
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: 8,
+                        fontSize: 12,
+                        padding: "6px 8px",
+                        borderRadius: 10,
+                        border: "1px solid rgba(148,163,184,0.18)",
+                        backgroundColor: "rgba(15,23,42,0.55)",
+                      }}
+                    >
+                      <span style={{ opacity: 0.95 }}>
+                        {it.name} <span style={{ opacity: 0.75 }}>x {Number(it.qty || 1)}</span>
+                      </span>
+                      <span style={{ opacity: 0.9 }}>
+                        {fmtMoney(Number(it.price || 0) * Number(it.qty || 1))}
+                      </span>
+                    </div>
+                  ))}
+
+                  {(!o.items || o.items.length === 0) && (
+                    <p style={{ fontSize: 12, opacity: 0.75, margin: 0 }}>
+                      (Este pedido no trae items en el response)
+                    </p>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Section>
+  </Accordion>
+)}
+
+
 
         {/* ===== REPORTES ===== */}
 <pre style={{ fontSize: 11, opacity: 0.8 }}>
@@ -4736,10 +6012,340 @@ boxShadow: noStock ? "none" : `0 0 0 1px ${catColor}40`,
               <p style={{ fontSize: 12, opacity: 0.8, marginBottom: 8 }}>
                 Panel completo (usa tu componente existente).
               </p>
+<div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+  <button
+    type="button"
+    onClick={async () => {
+      await loadMenuRecipes();
+      setShowRecipesPro(true);
+    }}
+    style={{
+      padding: "8px 12px",
+      borderRadius: 999,
+      border: "1px solid rgba(34,197,94,0.75)",
+      background: "rgba(22,163,74,0.12)",
+      color: "#bbf7d0",
+      fontSize: 12,
+      cursor: "pointer",
+      fontWeight: 900,
+    }}
+  >
+    🍔 Recetas PRO
+  </button>
+</div>
+
               <InventoryPanel />
             </Section>
           </>
         )}
+
+{showRecipesPro && (
+  <div
+    style={{
+      position: "fixed",
+      inset: 0,
+      zIndex: 9999,
+      background: "rgba(2,6,23,0.82)",
+      display: "grid",
+      placeItems: "center",
+      padding: 16,
+    }}
+    onMouseDown={(e) => {
+      if (e.target === e.currentTarget) setShowRecipesPro(false);
+    }}
+  >
+    <div
+      style={{
+        width: "min(980px, 96vw)",
+        borderRadius: 20,
+        border: "1px solid rgba(148,163,184,0.35)",
+        background:
+          "radial-gradient(circle at top left, rgba(15,23,42,0.98), rgba(2,6,23,0.95))",
+        boxShadow: "0 28px 80px rgba(0,0,0,0.55)",
+        padding: 14,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 14, fontWeight: 1000 }}>Recetas PRO</div>
+          <div style={{ fontSize: 11, opacity: 0.75 }}>
+            Tip PRO: usa unidades mínimas (g/ml/pz) y cantidades enteras.
+          </div>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setShowRecipesPro(false)}
+          style={{
+            width: 34,
+            height: 34,
+            borderRadius: 999,
+            border: "1px solid rgba(148,163,184,0.5)",
+            background: "transparent",
+            color: "var(--pos-text, #e5e7eb)",
+            fontWeight: 900,
+            cursor: "pointer",
+          }}
+          title="Cerrar"
+        >
+          ✕
+        </button>
+      </div>
+
+      {!!recipesError && (
+        <div style={{ fontSize: 12, color: "#fecaca", marginBottom: 8 }}>
+          {recipesError}
+        </div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1.1fr", gap: 12 }}>
+        {/* LISTA */}
+        <div
+          style={{
+            borderRadius: 16,
+            border: "1px solid rgba(148,163,184,0.25)",
+            background: "rgba(15,23,42,0.55)",
+            padding: 10,
+            maxHeight: 440,
+            overflow: "auto",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginBottom: 8 }}>
+            <div style={{ fontSize: 12, fontWeight: 900, opacity: 0.85 }}>Tus recetas</div>
+            <button
+              type="button"
+              onClick={() => setRecipeDraft(emptyRecipe)}
+              style={{
+                padding: "6px 10px",
+                borderRadius: 999,
+                border: "1px solid rgba(148,163,184,0.45)",
+                background: "rgba(2,6,23,0.25)",
+                color: "var(--pos-text, #e5e7eb)",
+                fontSize: 11,
+                cursor: "pointer",
+                fontWeight: 900,
+              }}
+            >
+              + Nueva
+            </button>
+          </div>
+
+          {recipesLoading ? (
+            <div style={{ fontSize: 12, opacity: 0.75 }}>Cargando…</div>
+          ) : menuRecipes.length === 0 ? (
+            <div style={{ fontSize: 12, opacity: 0.75 }}>Aún no hay recetas.</div>
+          ) : (
+            menuRecipes.map((r) => (
+              <div
+                key={r.id}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 10,
+                  padding: "10px 10px",
+                  borderRadius: 14,
+                  border: "1px solid rgba(148,163,184,0.16)",
+                  background: "rgba(2,6,23,0.30)",
+                  marginBottom: 8,
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 900, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {r.menuName}
+                  </div>
+                  <div style={{ fontSize: 11, opacity: 0.75 }}>
+                    Ingredientes: {Array.isArray(r.items) ? r.items.length : 0}
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button
+                    type="button"
+                    onClick={() => setRecipeDraft({ id: r.id, menuName: r.menuName || "", items: Array.isArray(r.items) ? r.items : [] })}
+                    style={{
+                      padding: "6px 10px",
+                      borderRadius: 999,
+                      border: "1px solid rgba(148,163,184,0.45)",
+                      background: "rgba(2,6,23,0.25)",
+                      color: "var(--pos-text, #e5e7eb)",
+                      fontSize: 11,
+                      cursor: "pointer",
+                      fontWeight: 900,
+                    }}
+                  >
+                    Editar
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => deleteRecipeById(r.id)}
+                    style={{
+                      padding: "6px 10px",
+                      borderRadius: 999,
+                      border: "1px solid rgba(239,68,68,0.55)",
+                      background: "rgba(239,68,68,0.10)",
+                      color: "var(--pos-text, #e5e7eb)",
+                      fontSize: 11,
+                      cursor: "pointer",
+                      fontWeight: 900,
+                    }}
+                  >
+                    Eliminar
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* EDITOR */}
+        <div
+          style={{
+            borderRadius: 16,
+            border: "1px solid rgba(148,163,184,0.25)",
+            background: "rgba(15,23,42,0.55)",
+            padding: 10,
+          }}
+        >
+          <div style={{ fontSize: 12, fontWeight: 900, opacity: 0.85, marginBottom: 8 }}>
+            {recipeDraft.id ? "Editar receta" : "Nueva receta"}
+          </div>
+
+          <input
+            value={recipeDraft.menuName}
+            onChange={(e) => setRecipeDraft((p) => ({ ...p, menuName: e.target.value }))}
+            placeholder="Nombre receta (ej. Hamburguesa de pollo)"
+            style={{
+              width: "100%",
+              padding: "10px 12px",
+              borderRadius: 14,
+              border: "1px solid rgba(148,163,184,0.35)",
+              background: "rgba(2,6,23,0.55)",
+              color: "var(--pos-text, #e5e7eb)",
+              fontSize: 12,
+              fontWeight: 900,
+              marginBottom: 10,
+            }}
+          />
+
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 8 }}>
+            <div style={{ fontSize: 11, opacity: 0.8, fontWeight: 900 }}>Ingredientes</div>
+            <button
+              type="button"
+              onClick={addRecipeLine}
+              style={{
+                padding: "6px 10px",
+                borderRadius: 999,
+                border: "1px solid rgba(34,197,94,0.75)",
+                background: "rgba(22,163,74,0.12)",
+                color: "#bbf7d0",
+                fontSize: 11,
+                cursor: "pointer",
+                fontWeight: 900,
+              }}
+            >
+              + Agregar ingrediente
+            </button>
+          </div>
+
+          {(recipeDraft.items || []).map((it, idx) => (
+            <div
+              key={idx}
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 120px 44px",
+                gap: 8,
+                alignItems: "center",
+                padding: 8,
+                borderRadius: 14,
+                border: "1px solid rgba(148,163,184,0.16)",
+                background: "rgba(2,6,23,0.30)",
+                marginBottom: 8,
+              }}
+            >
+              <select
+                value={it.inventoryItemId ?? ""}
+                onChange={(e) => updateRecipeLine(idx, "inventoryItemId", e.target.value)}
+                style={{
+                  width: "100%",
+                  padding: "8px 10px",
+                  borderRadius: 12,
+                  border: "1px solid rgba(75,85,99,0.9)",
+                  backgroundColor: "rgba(15,23,42,0.96)",
+                  color: "var(--pos-text, #e5e7eb)",
+                  fontSize: 11,
+                }}
+              >
+                <option value="">(Selecciona inventario)</option>
+                {(inventoryOptions || []).map((inv) => (
+                  <option key={inv.id} value={inv.id}>
+                    {inv.name}
+                  </option>
+                ))}
+              </select>
+
+              <input
+                type="number"
+                value={it.qty ?? 1}
+                onChange={(e) => updateRecipeLine(idx, "qty", e.target.value)}
+                placeholder="Cantidad"
+                style={{
+                  width: "100%",
+                  padding: "8px 10px",
+                  borderRadius: 12,
+                  border: "1px solid rgba(75,85,99,0.9)",
+                  backgroundColor: "rgba(15,23,42,0.96)",
+                  color: "var(--pos-text, #e5e7eb)",
+                  fontSize: 11,
+                  fontWeight: 900,
+                }}
+              />
+
+              <button
+                type="button"
+                onClick={() => removeRecipeLine(idx)}
+                style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: 999,
+                  border: "1px solid rgba(239,68,68,0.70)",
+                  backgroundColor: "rgba(239,68,68,0.08)",
+                  color: "rgba(239,68,68,1)",
+                  fontWeight: 900,
+                  cursor: "pointer",
+                }}
+                title="Quitar"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+
+          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 8 }}>
+            <button
+              type="button"
+              onClick={saveRecipeDraft}
+              style={{
+                padding: "10px 12px",
+                borderRadius: 14,
+                border: "1px solid rgba(34,197,94,0.75)",
+                background:
+                  "radial-gradient(circle at top left, rgba(34,197,94,0.22), rgba(15,23,42,0.98))",
+                color: "#bbf7d0",
+                fontSize: 12,
+                fontWeight: 1000,
+                cursor: "pointer",
+              }}
+            >
+              Guardar receta
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+)}
 
         {/* ===== AJUSTES ===== */}
         {activeTab === "ajustes" && (
@@ -4890,6 +6496,7 @@ boxShadow: noStock ? "none" : `0 0 0 1px ${catColor}40`,
             </Accordion>
 
             <Accordion title="Operación (Turno / Sesión)" defaultOpen={false}>
+
               <Section title="Turno global">
                 <p style={{ fontSize: 12, opacity: 0.8, marginTop: 0 }}>
                   Si el turno está cerrado, el mesero queda bloqueado hasta que lo abras.
@@ -4960,9 +6567,165 @@ boxShadow: noStock ? "none" : `0 0 0 1px ${catColor}40`,
                   Cerrar sesión (volver a login)
                 </button>
               </Section>
+<Section title="Impresión (QZ Tray)">
+  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+    <button
+      type="button"
+      onClick={async () => {
+        const list = await qzListPrinters();
+        setPrinters(list || []);
+        alert("✅ Impresoras cargadas");
+      }}
+      style={{
+        padding: "8px 12px",
+        borderRadius: 999,
+        border: "1px solid rgba(148,163,184,0.35)",
+        background: "rgba(2,6,23,0.25)",
+        color: "#e5e7eb",
+        fontSize: 11,
+        fontWeight: 900,
+        cursor: "pointer",
+      }}
+    >
+      Detectar impresoras
+    </button>
+
+    <select
+      value={printerName}
+      onChange={(e) => {
+        setPrinterName(e.target.value);
+        try { localStorage.setItem("pos_printer_name_v1", e.target.value); } catch {}
+      }}
+      style={{
+        padding: "8px 10px",
+        borderRadius: 12,
+        border: "1px solid rgba(75,85,99,0.9)",
+        backgroundColor: "rgba(15,23,42,0.96)",
+        color: "#e5e7eb",
+        fontSize: 11,
+        fontWeight: 800,
+        height: 40,
+        minWidth: 260,
+      }}
+    >
+      <option value="">(Selecciona impresora)</option>
+      {(printers || []).map((p) => (
+        <option key={p} value={p}>{p}</option>
+      ))}
+    </select>
+
+    <button
+      type="button"
+      onClick={async () => {
+        if (!printerName) return alert("Selecciona impresora primero");
+        await qzPrintEscpos(printerName, [
+          "POS MULTI BAR",
+          "--------------------------",
+          "Ticket de prueba",
+          `Fecha: ${new Date().toLocaleString("es-MX")}`,
+          "Gracias :)",
+        ]);
+      }}
+      style={{
+        padding: "8px 12px",
+        borderRadius: 999,
+        border: "1px solid rgba(34,197,94,0.55)",
+        background: "rgba(34,197,94,0.18)",
+        color: "#e5e7eb",
+        fontSize: 11,
+        fontWeight: 900,
+        cursor: "pointer",
+      }}
+    >
+      Imprimir prueba
+    </button>
+  </div>
+
+  <div style={{ marginTop: 8, fontSize: 11, opacity: 0.75 }}>
+    Estado: <b>{printerName ? printerName : "No configurada"}</b>
+  </div>
+</Section>
+
             </Accordion>
           </>
         )}
+
+
+{false && (
+  <>
+    <button
+      type="button"
+      onClick={async () => {
+        const list = await qzListPrinters();
+        setPrinters(list || []);
+        alert("✅ Impresoras cargadas");
+      }}
+      style={{
+        padding: "8px 12px",
+        borderRadius: 999,
+        border: "1px solid rgba(148,163,184,0.35)",
+        background: "rgba(2,6,23,0.25)",
+        color: "#e5e7eb",
+        fontSize: 11,
+        fontWeight: 900,
+        cursor: "pointer",
+      }}
+    >
+      Detectar impresoras
+    </button>
+
+    <select
+      value={printerName}
+      onChange={(e) => {
+        setPrinterName(e.target.value);
+        try { localStorage.setItem("pos_printer_name_v1", e.target.value); } catch {}
+      }}
+      style={{
+        padding: "8px 10px",
+        borderRadius: 12,
+        border: "1px solid rgba(75,85,99,0.9)",
+        backgroundColor: "rgba(15,23,42,0.96)",
+        color: "#e5e7eb",
+        fontSize: 11,
+        fontWeight: 800,
+        height: 40,
+        minWidth: 260,
+      }}
+    >
+      <option value="">(Selecciona impresora)</option>
+      {(printers || []).map((p) => (
+        <option key={p} value={p}>{p}</option>
+      ))}
+    </select>
+
+    <button
+      type="button"
+      onClick={async () => {
+        if (!printerName) return alert("Selecciona impresora primero");
+        await qzPrintEscpos(printerName, [
+          "POS MULTI BAR",
+          "--------------------------",
+          "Ticket de prueba",
+          `Fecha: ${new Date().toLocaleString("es-MX")}`,
+          "Gracias :)",
+        ]);
+      }}
+      style={{
+        padding: "8px 12px",
+        borderRadius: 999,
+        border: "1px solid rgba(34,197,94,0.55)",
+        background: "rgba(34,197,94,0.18)",
+        color: "#e5e7eb",
+        fontSize: 11,
+        fontWeight: 900,
+        cursor: "pointer",
+      }}
+    >
+      Imprimir prueba
+    </button>
+  </>
+)}
+
 
         {/* Botón flotante caja (admin + home) */}
         {isAdmin && activeTab === "home" && (
