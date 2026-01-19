@@ -3,6 +3,7 @@ const express = require("express");
 const router = express.Router();
 const { PrismaClient } = require("@prisma/client");
 
+
 const prisma = new PrismaClient();
 
 const startOfDay = (date = new Date()) => {
@@ -36,6 +37,28 @@ function safeParseItems(itemsStr) {
 }
 
 // ===============================
+// helper: resolver tenant (mínimo, seguro)
+// ===============================
+async function resolveTenant(req) {
+  const tenantKeyRaw =
+    req.header("x-tenant") ||
+    req.header("X-Tenant") ||
+    req.header("x-tenant-key") ||
+    req.header("X-Tenant-Key") ||
+    "default";
+
+  const tenantKey = String(tenantKeyRaw).trim().toLowerCase();
+
+  const tenant = await prisma.tenant.upsert({
+    where: { key: tenantKey },
+    update: {},
+    create: { key: tenantKey, name: tenantKey },
+  });
+
+  return tenant; // { id, key, name, ... }
+}
+
+// ===============================
 // POST /api/reports/close-day
 // ===============================
 router.post("/close-day", async (req, res) => {
@@ -43,18 +66,22 @@ router.post("/close-day", async (req, res) => {
     const start = startOfDay(new Date());
     const end = endOfDay(new Date());
 
-const orders = await prisma.order.findMany({
-  where: {
-    createdAt: { gte: start, lte: end },
-    isPaid: true,
-  },
-  select: {
-    id: true,
-    total: true,
-    paymentMethod: true,
-  },
-});
+    // ✅ TENANT (sin req.tenant)
+    const tenant = await resolveTenant(req);
+    const tenantId = tenant.id;
 
+    // Traer órdenes pagadas del día (mantengo tu lógica)
+    const orders = await prisma.order.findMany({
+      where: {
+        createdAt: { gte: start, lte: end },
+        isPaid: true,
+      },
+      select: {
+        id: true,
+        total: true,
+        paymentMethod: true,
+      },
+    });
 
     const totalOrders = orders.length;
     const totalSales = orders.reduce((sum, o) => sum + (o.total || 0), 0);
@@ -64,7 +91,7 @@ const orders = await prisma.order.findMany({
     let paymentTransfer = 0;
 
     for (const o of orders) {
-      const m = String(o.paymentMethod || "CASH").toUpperCase();
+      const m = normalizePaymentMethod(o.paymentMethod);
       const amount = Number(o.total || 0) || 0;
 
       if (m === "CARD") paymentCard += amount;
@@ -72,32 +99,50 @@ const orders = await prisma.order.findMany({
       else paymentCash += amount;
     }
 
-    // ✅ CORRECCIÓN CRÍTICA
+    // 🕛 Fecha normalizada (MISMO día siempre)
     const reportDate = startOfDay(new Date());
 
-    const dailyReport = await prisma.dailyReport.upsert({
-      where: { date: reportDate },
-      update: {
-        totalOrders,
-        totalSales,
-        paymentCash,
-        paymentCard,
-        paymentTransfer,
-      },
-      create: {
+    // ✅ NO usamos tenantId_date (no existe en tu schema)
+    // ✅ NO usamos upsert compuesto; hacemos findFirst + update/create (mínimo y estable)
+    const existing = await prisma.dailyReport.findFirst({
+      where: {
+        tenantId: tenantId,
         date: reportDate,
-        totalOrders,
-        totalSales,
-        paymentCash,
-        paymentCard,
-        paymentTransfer,
       },
+      select: { id: true },
     });
+
+    let dailyReport;
+
+    if (existing) {
+      dailyReport = await prisma.dailyReport.update({
+        where: { id: existing.id },
+        data: {
+          totalOrders,
+          totalSales,
+          paymentCash,
+          paymentCard,
+          paymentTransfer,
+        },
+      });
+    } else {
+      dailyReport = await prisma.dailyReport.create({
+        data: {
+          tenantId: tenantId,
+          date: reportDate,
+          totalOrders,
+          totalSales,
+          paymentCash,
+          paymentCard,
+          paymentTransfer,
+        },
+      });
+    }
 
     return res.json({
       ok: true,
       message: "Día cerrado y reporte generado",
-      report: dailyReport, // ✅ variable correcta
+      report: dailyReport,
     });
   } catch (error) {
     console.error("❌ Error cierre día:", error);
@@ -111,6 +156,10 @@ const orders = await prisma.order.findMany({
 router.get("/daily", async (req, res) => {
   try {
     const { from, to } = req.query;
+
+    // ✅ TENANT (sin romper)
+    const tenant = await resolveTenant(req);
+    const tenantId = tenant.id;
 
     let fromDate;
     let toDate;
@@ -136,6 +185,7 @@ router.get("/daily", async (req, res) => {
 
     const reports = await prisma.dailyReport.findMany({
       where: {
+        tenantId: tenantId,
         date: { gte: fromDate, lte: toDate },
       },
       orderBy: { date: "asc" },
@@ -150,24 +200,98 @@ router.get("/daily", async (req, res) => {
       paymentTransfer: Number(r.paymentTransfer || 0),
     }));
 
+// ===============================
+// 🔁 FALLBACK: armar histórico desde orders
+// ===============================
+if (!Array.isArray(reports) || reports.length === 0) {
+  const fromQ = from ? new Date(from) : null;
+  const toQ = to ? new Date(to) : null;
+
+  const fromD = fromQ
+    ? new Date(fromQ.getFullYear(), fromQ.getMonth(), fromQ.getDate(), 0, 0, 0, 0)
+    : null;
+  const toD = toQ
+    ? new Date(toQ.getFullYear(), toQ.getMonth(), toQ.getDate(), 23, 59, 59, 999)
+    : null;
+
+  const orders = await db.order.findMany({
+    where: {
+      tenantId,
+      cancelledAt: null,
+      ...(fromD && toD ? { paidAt: { gte: fromD, lte: toD } } : {}),
+      ...(fromD && !toD ? { paidAt: { gte: fromD } } : {}),
+      ...(!fromD && toD ? { paidAt: { lte: toD } } : {}),
+    },
+    select: {
+      paidAt: true,
+      total: true,
+    },
+  });
+
+  const map = new Map();
+
+  for (const o of orders) {
+    if (!o.paidAt) continue;
+
+    const d = new Date(o.paidAt);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+    const prev = map.get(key) || {
+      date: key,
+      totalSales: 0,
+      totalOrders: 0,
+      avgTicket: 0,
+    };
+
+    prev.totalSales += Number(o.total || 0);
+    prev.totalOrders += 1;
+    map.set(key, prev);
+  }
+
+  const daily = Array.from(map.values())
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map((r) => ({
+      ...r,
+      avgTicket: r.totalOrders > 0 ? r.totalSales / r.totalOrders : 0,
+    }));
+
+  return res.json(daily);
+}
+
+
     return res.json(out);
   } catch (error) {
     console.error("Error al obtener reportes diarios:", error);
-    return res.status(500).json({ error: "Error al obtener los reportes diarios" });
+    return res
+      .status(500)
+      .json({ error: "Error al obtener los reportes diarios" });
   }
 });
 
+// ===============================
 // GET /api/reports/today
+// ===============================
 router.get("/today", async (req, res) => {
-  const today = new Date();
-  today.setHours(0,0,0,0);
+  try {
+    // ✅ TENANT (sin romper)
+    const tenant = await resolveTenant(req);
+    const tenantId = tenant.id;
 
-  const report = await prisma.dailyReport.findUnique({
-    where: { date: today }
-  });
+    const today = startOfDay(new Date());
 
-  res.json(report || null);
+    // ✅ NO findUnique por date (no es unique en tu schema)
+    const report = await prisma.dailyReport.findFirst({
+      where: {
+        tenantId: tenantId,
+        date: today,
+      },
+    });
+
+    return res.json(report || null);
+  } catch (error) {
+    console.error("Error al obtener reporte today:", error);
+    return res.status(500).json({ error: "Error al obtener reporte today" });
+  }
 });
-
 
 module.exports = router;

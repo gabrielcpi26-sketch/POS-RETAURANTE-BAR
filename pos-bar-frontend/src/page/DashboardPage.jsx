@@ -13,6 +13,14 @@ import { qzListPrinters, qzPrintEscpos } from "../utils/qzPrint";
 
 
 
+
+
+
+
+
+
+
+
 import {
   Chart as ChartJS,
   BarElement,
@@ -51,6 +59,8 @@ window.dispatchInventoryRefresh = () => {
   loadInventoryOptions();
   loadLowStock();
 };
+
+
 
 // =======================
 // TEMAS PRECONFIGURADOS
@@ -109,6 +119,8 @@ const THEME_PRESETS = {
   },
 };
 
+
+
 // =======================
 // MENÚ RÁPIDO DEFAULT
 // =======================
@@ -128,6 +140,19 @@ const DEFAULT_PRODUCTS = [
 const PROMO_MAPPINGS = {
   "Cubeta 6 cervezas": { inventoryName: "Cerveza nacional", units: 6 },
 };
+
+// ✅ Tenant key seguro (evita undefined)
+const getTenantKeySafe = () => {
+  try {
+    const k = (localStorage.getItem("tenant_key") || "").toString().trim();
+    return k || "default";
+  } catch {
+    return "default";
+  }
+};
+
+
+const QUICK_KEY = `pos_quick_products_v1_${getTenantKeySafe()}`;
 
 function loadStoredProducts() {
   try {
@@ -167,6 +192,7 @@ const ROLES = {
 
 const ROLE_KEY = "pos_user_role_v1"; // en sessionStorage (por pestaña)
 const TURNO_KEY = "pos_turno_global_abierto"; // en localStorage (global)
+const TURNO_KEY_T = `pos_turno_global_abierto_${getTenantKeySafe()}`; // ✅ por tenant
 const SALES_BASELINE_KEY = "pos_sales_baseline_v1";
 const ORDERS_BASELINE_KEY = "pos_orders_baseline_v1";
 const isTurnoAbierto = () => localStorage.getItem(TURNO_KEY) === "1";
@@ -263,8 +289,57 @@ const CASH_MOVES_KEY = (todayKey) => `pos_cash_moves_v1_${todayKey}`;
 
 
 
-
 export default function DashboardPage() {
+
+// ✅ Auto-tenant_key por hostname (evita que caiga en "default" y cambie el plan a los segundos)
+useEffect(() => {
+  try {
+    const host = (window.location.hostname || "").toLowerCase(); // ej: client1.localhost
+    const sub = host.split(".")[0]; // client1
+
+    if (sub && sub !== "localhost" && sub !== "www") {
+      localStorage.setItem("tenant_key", sub);
+    }
+  } catch {}
+}, []);
+
+
+
+
+useEffect(() => {
+  let alive = true;
+
+  const loadTenantPlan = async () => {
+    try {
+      const tenantKey =
+        localStorage.getItem("tenant_key")?.toString().trim() || "default";
+
+      const res = await fetch(`${API_URL}/api/tenant/plan`, {
+        headers: {
+          "X-Tenant-Key": tenantKey,
+        },
+      });
+
+      if (!res.ok) return;
+
+      const data = await res.json();
+      const plan = (data?.plan || "FREE").toString();
+
+      if (!alive) return;
+
+      localStorage.setItem("tenant_plan", plan);
+      setTenantPlan(plan);
+    } catch {
+      // ❗ no rompe nada, se queda en FREE
+    }
+  };
+
+  loadTenantPlan();
+
+  return () => {
+    alive = false;
+  };
+}, []);
 
 
 // ======================
@@ -276,6 +351,8 @@ const [summaryError, setSummaryError] = useState("");
 
 const adminSummaryRef = useRef(null);
 const adminSummaryReqIdRef = useRef(0);
+
+
 
 
   // =======================
@@ -290,6 +367,8 @@ const adminSummaryReqIdRef = useRef(0);
   });
 
 const [cashNote, setCashNote] = useState("");
+
+
 
 const [turnoAbierto, setTurnoAbierto] = useState(
   localStorage.getItem(TURNO_KEY) === "1"
@@ -383,12 +462,14 @@ const [printers, setPrinters] = useState([]);
     window.location.href = "/";
   }
 
+
+
   // =======================
   // TURNO GLOBAL
   // =======================
   const [turnoGlobalAbierto, setTurnoGlobalAbierto] = useState(() => {
     try {
-      return localStorage.getItem(TURNO_KEY) === "1";
+      return localStorage.getItem(TURNO_KEY_T) === "1";
     } catch {
       return false;
     }
@@ -396,7 +477,7 @@ const [printers, setPrinters] = useState([]);
 useEffect(() => {
   const syncTurno = () => {
     try {
-      setTurnoGlobalAbierto(localStorage.getItem(TURNO_KEY) === "1");
+      setTurnoGlobalAbierto(localStorage.getItem(TURNO_KEY_T) === "1");
     } catch {
       setTurnoGlobalAbierto(false);
     }
@@ -416,7 +497,12 @@ useEffect(() => {
 async function abrirTurnoGlobal() {
   try {
     // 1) Abrir turno (lo que ya hacías)
+    localStorage.setItem(TURNO_KEY_T, "1");
+
+    // ✅ compat: también marcamos el turno global clásico
     localStorage.setItem(TURNO_KEY, "1");
+    setTurnoAbierto(true);
+
     window.dispatchEvent(new Event("pos_turno_global_changed"));
   } catch {}
 
@@ -430,9 +516,27 @@ async function abrirTurnoGlobal() {
         ? API_URL
         : "";
 
-    const res = await fetch(`${BASE_URL}/api/orders/admin/summary-today`, {
-      cache: "no-store",
-    });
+   const tenantKeyRaw = localStorage.getItem("tenant_key");
+const tenantKey =
+  tenantKeyRaw && tenantKeyRaw !== "null" && tenantKeyRaw !== "undefined"
+    ? tenantKeyRaw
+    : "default";
+
+const TURNO_KEY_T = `pos_turno_global_abierto_${tenantKey}`;
+const SHIFT_BASELINE_KEY_T = (todayKey) =>
+  `pos_shift_baseline_v1_${todayKey}_${tenantKey}`;
+
+
+const res = await fetch(`${BASE_URL}/api/orders/admin/summary-today`, {
+  cache: "no-store",
+ headers: {
+  "Content-Type": "application/json",
+  "x-tenant": tenantKey,
+  "X-Tenant-Key": tenantKey, // opcional (compat)
+},
+
+});
+
 
     if (res.ok) {
       const data = await res.json();
@@ -450,7 +554,8 @@ async function abrirTurnoGlobal() {
       };
 
       localStorage.setItem(
-        SHIFT_BASELINE_KEY(todayKey),
+        SHIFT_BASELINE_KEY_T(todayKey)
+(todayKey),
         JSON.stringify(newBaseline)
       );
     }
@@ -460,20 +565,27 @@ async function abrirTurnoGlobal() {
   setTurnoGlobalAbierto(true); // ✅ AQUÍ
 }
 
- function cerrarTurnoGlobal() {
+function cerrarTurnoGlobal() {
   try {
+    localStorage.setItem(TURNO_KEY_T, "0");
+
+    // ✅ compat: también cerramos el turno global clásico
     localStorage.setItem(TURNO_KEY, "0");
+    setTurnoAbierto(false);
+
     window.dispatchEvent(new Event("pos_turno_global_changed"));
   } catch {}
-  setTurnoGlobalAbierto(false); // ✅ AQUÍ
+
+  setTurnoGlobalAbierto(false); // (deja lo tuyo tal cual)
 }
+
 
  // ✅ DUPLICADO DESACTIVADO (ya existe el useEffect arriba)
 if (false) useEffect(() => {
 
     const syncTurno = () => {
       try {
-        setTurnoGlobalAbierto(localStorage.getItem(TURNO_KEY) === "1");
+        setTurnoGlobalAbierto(localStorage.getItem(TURNO_KEY_T) === "1");
       } catch {}
     };
 
@@ -481,7 +593,7 @@ if (false) useEffect(() => {
     window.addEventListener("pos_turno_global_changed", syncTurno);
 
     const onStorage = (e) => {
-      if (e.key === TURNO_KEY) syncTurno();
+      if (e.key === TURNO_KEY_T) syncTurno();
     };
     window.addEventListener("storage", onStorage);
 
@@ -491,6 +603,7 @@ if (false) useEffect(() => {
     };
   }, []);
 
+const tenantPlan = localStorage.getItem("tenant_plan") || "FREE";
 
 // ======================
 // EXTRAS PRO (Upsell) — por restaurante (hostname)
@@ -624,11 +737,15 @@ const editorSelectStyle = {
   border: "1px solid rgba(75,85,99,0.9)",
   backgroundColor: "rgba(15,23,42,0.96)",
   color: "var(--pos-text, #e5e7eb)",
+  colorScheme: "dark", // ✅ <-- AGREGA SOLO ESTO
   fontSize: 11,
   fontWeight: 800,
   boxSizing: "border-box",
   outline: "none",
+WebkitTextFillColor: "var(--pos-text, #e5e7eb)",
+  colorScheme: "dark",
 };
+
 
   // =======================
   // PIN MESERO (solo /mesero)
@@ -682,14 +799,32 @@ const editorSelectStyle = {
   const [inventoryOptions, setInventoryOptions] = useState([]);
   async function loadInventoryOptions() {
     try {
-      const res = await fetch(`${API_URL}/api/orders/debug/inventory-items`, {
+  const tenantKeyRaw = localStorage.getItem("tenant_key");
+const tenantKey =
+  tenantKeyRaw && tenantKeyRaw !== "null" && tenantKeyRaw !== "undefined"
+    ? tenantKeyRaw
+    : "default";
 
-        cache: "no-store",
-      });
+const res = await fetch(`${API_URL}/api/orders/debug/inventory-items`, {
+  cache: "no-store",
+  headers: {
+    "x-tenant": tenantKey, // ✅ SIEMPRE manda tenant válido
+  },
+});
+
+
       if (!res.ok) return;
 
       const data = await res.json();
-      setInventoryOptions(Array.isArray(data) ? data : []);
+
+const list = (Array.isArray(data) ? data : []).map((it) => ({
+  ...it,
+  id: Number(it.id),
+  stock: Number(it.currentStock ?? it.stock ?? it.quantity ?? 0),
+}));
+
+setInventoryOptions(list);
+
     } catch (err) {
       console.error("Error cargando inventario:", err);
     }
@@ -709,9 +844,20 @@ const [recipeDraft, setRecipeDraft] = useState(emptyRecipe);
 async function loadMenuRecipes() {
   setRecipesError("");
   setRecipesLoading(true);
+
   try {
-    const res = await fetch(`${API_URL}/api/menu-recipes`, { cache: "no-store" });
+    const tenantKey = getTenantKeySafe();
+
+    const res = await fetch(`${API_URL}/api/menu-recipes`, {
+      cache: "no-store",
+   headers: {
+  "x-tenant": tenantKey,
+  "X-Tenant-Key": tenantKey, // opcional
+},
+    });
+
     if (!res.ok) throw new Error("No se pudo cargar recetas");
+
     const data = await res.json();
     setMenuRecipes(Array.isArray(data) ? data : []);
   } catch (e) {
@@ -765,20 +911,31 @@ async function saveRecipeDraft() {
 
     const payload = { menuName: cleanName, items: cleanItems };
 
+const tenantKey = getTenantKeySafe();
+
+
     if (recipeDraft.id) {
-      const res = await fetch(`${API_URL}/api/menu-recipes/${recipeDraft.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) throw new Error("No se pudo actualizar receta");
+    const res = await fetch(`${API_URL}/api/menu-recipes/${recipeDraft.id}`, {
+  method: "PUT",
+  headers: {
+    "Content-Type": "application/json",
+    "X-Tenant-Key": tenantKey,
+  },
+  body: JSON.stringify(payload),
+});
+if (!res.ok) throw new Error("No se pudo actualizar receta");
+
     } else {
-      const res = await fetch(`${API_URL}/api/menu-recipes`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) throw new Error("No se pudo crear receta");
+  const res = await fetch(`${API_URL}/api/menu-recipes`, {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "X-Tenant-Key": tenantKey,
+  },
+  body: JSON.stringify(payload),
+});
+if (!res.ok) throw new Error("No se pudo crear receta");
+
     }
 
     await loadMenuRecipes();
@@ -795,9 +952,15 @@ async function deleteRecipeById(id) {
     const ok = window.confirm("¿Eliminar receta? (no afecta ventas pasadas)");
     if (!ok) return;
 
-    const res = await fetch(`${API_URL}/api/menu-recipes/${id}`, {
-      method: "DELETE",
-    });
+const tenantKey = getTenantKeySafe();
+   
+ const res = await fetch(`${API_URL}/api/menu-recipes/${id}`, {
+  method: "DELETE",
+  headers: {
+    "X-Tenant-Key": tenantKey,
+  },
+});
+
     if (!res.ok) throw new Error("No se pudo eliminar receta");
 
     await loadMenuRecipes();
@@ -840,25 +1003,138 @@ const visibleExtras = useMemo(() => {
     return hit ? Number(hit.id) : null;
   };
 
-  // =======================
-  // MENÚ RÁPIDO (con editor)
-  // =======================
-const [quickProducts, setQuickProducts] = useState(() => loadStoredProducts());
+const tenantKey = localStorage.getItem("tenant_key") || "default";
+
+
+
+const QUICK_KEY = `pos_quick_products_v1_${tenantKey}`;
+const SECTIONS_KEY = `pos_menu_sections_v1_${tenantKey}`;
+
+
+// =======================
+// MENÚ RÁPIDO (con editor)
+// =======================
+const [quickProducts, setQuickProducts] = useState(() => {
+  const raw = localStorage.getItem(QUICK_KEY);
+  return raw ? JSON.parse(raw) : DEFAULT_PRODUCTS;
+});
+
+const quickHydratedRef = useRef(false);
+
+// ======================
+// QUICK MENU - DB (GET)
+// ======================
+useEffect(() => {
+  let alive = true;
+
+  const run = async () => {
+    try {
+      const base = import.meta.env.VITE_API_URL || "http://localhost:4000";
+      const res = await fetch(`${base}/api/quick-products`, {
+        method: "GET",
+        headers: {
+          ...tenantHeaders(),
+        },
+      });
+
+      if (!res.ok) return; // no rompas nada: si falla, te quedas con localStorage/default
+
+      const data = await res.json();
+      const items = Array.isArray(data?.items) ? data.items : [];
+
+      if (!alive) return;
+
+      setQuickProducts(items);
+      localStorage.setItem(QUICK_KEY, JSON.stringify(items));
+    } catch {
+      // silencioso para no romper
+    } finally {
+      // ya hidrato (aunque haya caído en fallback)
+      quickHydratedRef.current = true;
+    }
+  };
+
+  run();
+  return () => {
+    alive = false;
+  };
+  // IMPORTANTE: si cambia tenant, cambia QUICK_KEY
+}, [QUICK_KEY]);
+
+useEffect(() => {
+  let alive = true;
+  const run = async () => {
+    try {
+      const base = import.meta.env.VITE_API_URL || "http://localhost:4000";
+      const res = await fetch(`${base}/api/tenant/plan`, { headers: { ...tenantHeaders() } });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!alive) return;
+      localStorage.setItem("tenant_plan", (data?.plan || "FREE").toString());
+    } catch {}
+  };
+  run();
+  return () => { alive = false; };
+}, [tenantKey]);
+
+
+
+// 1) Cargar desde localStorage (SOLO lee) — por tenant
+useEffect(() => {
+  let cancelled = false;
+  quickHydratedRef.current = false;
+
+  const hydrate = async () => {
+    // A) Fallback inmediato desde localStorage (para no dejar la UI vacía)
+    try {
+      const raw = localStorage.getItem(QUICK_KEY);
+      if (raw && !cancelled) setQuickProducts(JSON.parse(raw));
+      if (!raw && !cancelled) setQuickProducts(DEFAULT_PRODUCTS);
+    } catch {
+      if (!cancelled) setQuickProducts(DEFAULT_PRODUCTS);
+    }
+
+    // B) Fuente real: backend (Supabase vía Prisma)
+    try {
+      const resp = await fetch(`${API_URL}/api/quick-products`, {
+        headers: { "x-tenant-key": tenantKey },
+      });
+
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+      const data = await resp.json();
+      const items = Array.isArray(data?.items) ? data.items : [];
+
+      // Si backend trae items, manda eso y cachea en localStorage
+      if (!cancelled && items.length > 0) {
+        setQuickProducts(items);
+        localStorage.setItem(QUICK_KEY, JSON.stringify(items));
+      }
+    } catch (e) {
+      // Si falla backend, nos quedamos con lo que ya cargamos de localStorage/default
+      console.warn("QuickProducts hydrate backend failed:", e);
+    } finally {
+      if (!cancelled) quickHydratedRef.current = true;
+    }
+  };
+
+  hydrate();
+
+  return () => {
+    cancelled = true;
+  };
+}, [tenantKey]);
+
 const [showMenuEditor, setShowMenuEditor] = useState(false);
+
 // ❌ Eliminar platillo del menú rápido (ADMIN)
 const handleDeleteMenuProduct = (productId) => {
-  setQuickProducts((prev) => {
-    const next = prev.filter((p) => p.id !== productId);
-    localStorage.setItem("pos_quick_products_v1", JSON.stringify(next));
-    return next;
-  });
+  setQuickProducts((prev) => prev.filter((p) => p.id !== productId));
 };
-
-
 
 const [menuSections, setMenuSections] = useState(() => {
   try {
-    const raw = localStorage.getItem("pos_menu_sections_v1");
+    const raw = localStorage.getItem(SECTIONS_KEY);
     if (!raw) return ["Comida", "Bebidas"];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) && parsed.length > 0 ? parsed : ["Comida", "Bebidas"];
@@ -875,7 +1151,6 @@ const CATEGORY_COLORS = {
 };
 
 const [lastAddedId, setLastAddedId] = useState(null);
-
 
 const [activeMenuSection, setActiveMenuSection] = useState(
   () => menuSections[0] || "Comida"
@@ -904,14 +1179,12 @@ const handleAddMenuProduct = (sectionName) => {
 
       // ✅ CLAVE PARA EXTRAS
       allowExtras: true,
- // ✅ NUEVO: lista de extras permitidos para este platillo
-  extrasIds: [],
+      // ✅ NUEVO: lista de extras permitidos para este platillo
+      extrasIds: [],
     };
     return [...prev, newItem];
   });
 };
-
-
 
 const getQuickProductsBySectionAndCategory = () => {
   const sections = {};
@@ -925,8 +1198,11 @@ const getQuickProductsBySectionAndCategory = () => {
   return sections;
 };
 
-
 const [recipeOptions, setRecipeOptions] = useState([]);
+
+
+
+
 
 
 // =======================
@@ -956,83 +1232,81 @@ const submitQuickPickNumber = () => {
   const p = quickPickProduct;
   if (!p) return closeQuickPick();
 
-
-
   // =======================
   // STEP 1: CATEGORÍA
   // =======================
   if (quickPickStep === "category") {
     const chosenCategory = picked.meta?.categoryChoice || "";
 
- // 2) tamaños (DETECTAR POR PRECIO, NO por label)
-const hasSizes =
-  Number(p.sizeSmallPrice || 0) > 0 || Number(p.sizeLargePrice || 0) > 0;
+    // 2) tamaños (DETECTAR POR PRECIO, NO por label)
+    const hasSizes =
+      Number(p.sizeSmallPrice || 0) > 0 || Number(p.sizeLargePrice || 0) > 0;
 
-if (hasSizes) {
-  const sizeOpts = [];
+    if (hasSizes) {
+      const sizeOpts = [];
 
-  if (Number(p.sizeSmallPrice || 0) > 0) {
-    sizeOpts.push({
-      key: "1",
-      label: `${p.sizeSmallLabel || "Chico"} — ${fmtMoney(Number(p.sizeSmallPrice || 0))}`,
-      meta: {
-        sizeLabel: p.sizeSmallLabel || "Chico",
-        price: Number(p.sizeSmallPrice || 0),
-        categoryChoice: chosenCategory || "",
-      },
-    });
-  }
+      if (Number(p.sizeSmallPrice || 0) > 0) {
+        sizeOpts.push({
+          key: "1",
+          label: `${p.sizeSmallLabel || "Chico"} — ${fmtMoney(
+            Number(p.sizeSmallPrice || 0)
+          )}`,
+          meta: {
+            sizeLabel: p.sizeSmallLabel || "Chico",
+            price: Number(p.sizeSmallPrice || 0),
+            categoryChoice: chosenCategory || "",
+          },
+        });
+      }
 
-  if (Number(p.sizeLargePrice || 0) > 0) {
-    sizeOpts.push({
-      key: "2",
-      label: `${p.sizeLargeLabel || "Grande"} — ${fmtMoney(Number(p.sizeLargePrice || 0))}`,
-      meta: {
-        sizeLabel: p.sizeLargeLabel || "Grande",
-        price: Number(p.sizeLargePrice || 0),
-        categoryChoice: chosenCategory || "",
-      },
-    });
-  }
+      if (Number(p.sizeLargePrice || 0) > 0) {
+        sizeOpts.push({
+          key: "2",
+          label: `${p.sizeLargeLabel || "Grande"} — ${fmtMoney(
+            Number(p.sizeLargePrice || 0)
+          )}`,
+          meta: {
+            sizeLabel: p.sizeLargeLabel || "Grande",
+            price: Number(p.sizeLargePrice || 0),
+            categoryChoice: chosenCategory || "",
+          },
+        });
+      }
 
+      setQuickPickProduct(p);
+      setQuickPickStep("size");
+      setQuickPickOpts(sizeOpts);
+      setQuickPickInput("");
+      setQuickPickOpen(true);
+      return;
+    }
 
-  setQuickPickProduct(p);
-  setQuickPickStep("size");
-  setQuickPickOpts(sizeOpts);
-  setQuickPickInput("");
-  setQuickPickOpen(true);
-  return;
-}
+    // 👉 SIN TAMAÑOS: arma el item final
+    const finalPrice = Number(p.price || 0);
 
+    const finalItem = {
+      id: `${p.id}-${Date.now()}`,
+      baseProductId: p.id,
+      name: p.name,
+      displayName: `${p.name}${chosenCategory ? " " + chosenCategory : ""}`,
+      price: finalPrice,
+      sizeLabel: "",
+      categoryChoice: chosenCategory,
+      inventoryItemId: p.inventoryItemId ?? null,
+      menuRecipeId: p.menuRecipeId ?? null,
+      allowedExtrasIds: Array.isArray(p.extrasIds) ? p.extrasIds : [],
+      section: p.section || "",
+    };
 
- // 👉 SIN TAMAÑOS: arma el item final
-const finalPrice = Number(p.price || 0);
+    // ✅ Si quiere extras, abre extras y NO agregues todavía
+    if (p?.allowExtras) {
+      closeQuickPick();
+      openExtrasForProduct(finalItem);
+      return;
+    }
 
-const finalItem = {
-  id: `${p.id}-${Date.now()}`,
-  baseProductId: p.id,
-  name: p.name,
-  displayName: `${p.name}${chosenCategory ? " " + chosenCategory : ""}`,
-  price: finalPrice,
-  sizeLabel: "",
-  categoryChoice: chosenCategory,
-  inventoryItemId: p.inventoryItemId ?? null,
-  menuRecipeId: p.menuRecipeId ?? null,
-allowedExtrasIds: Array.isArray(p.extrasIds) ? p.extrasIds : [],
-section: p.section || "",
-
-};
-
-// ✅ Si quiere extras, abre extras y NO agregues todavía
-if (p?.allowExtras) {
-  closeQuickPick();
-  openExtrasForProduct(finalItem);
-  return;
-}
-
-handleAddProduct(finalItem);
-return closeQuickPick();
-
+    handleAddProduct(finalItem);
+    return closeQuickPick();
   }
 
   // =======================
@@ -1085,9 +1359,11 @@ useEffect(() => {
 
 
 useEffect(() => {
-  if (showMenuEditor) loadRecipeOptions();
+  if (showMenuEditor) {
+    loadRecipeOptions();
+    loadInventoryOptions(); // 👈 SOLO esto se agrega
+  }
 }, [showMenuEditor]);
-
 
   // =======================
   // ÁREAS / MESAS
@@ -1128,7 +1404,15 @@ const [qrTarget, setQrTarget] = useState(null);
     try {
       setLoadingAreas(true);
       setAreasError("");
-      const res = await fetch(`${API_URL}/api/areas`, { cache: "no-store" });
+  const tenantKey = localStorage.getItem("tenant_key") || "default";
+
+const res = await fetch(`${API_URL}/api/areas`, {
+  cache: "no-store",
+  headers: {
+    "X-Tenant": tenantKey,
+  },
+});
+
       if (!res.ok) throw new Error("No se pudieron cargar las áreas");
       const data = await res.json();
       setAreas(Array.isArray(data) ? data : []);
@@ -1153,7 +1437,15 @@ const handleSelectTable = async (area, table) => {
   });
 
   try {
-    const res = await fetch(`${API_URL}/api/orders/open/table/${table.id}`);
+    const tenantKey = localStorage.getItem("tenant_key") || "default";
+
+const res = await fetch(`${API_URL}/api/orders/open/table/${table.id}`, {
+headers: {
+  "x-tenant": tenantKey,
+}
+
+});
+
     if (!res.ok) return;
 
     const data = await res.json();
@@ -1179,31 +1471,44 @@ const handleSelectTable = async (area, table) => {
   const isSelected = (areaId, tableId) =>
     selectedArea?.id === areaId && selectedTable?.id === tableId;
 
-  const handleCreateArea = async () => {
-    if (!newAreaName.trim()) return alert("Escribe un nombre para la nueva área");
-    try {
-      setCreatingArea(true);
-      const res = await fetch(`${API_URL}/api/areas`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: newAreaName.trim(),
-          description: newAreaDescription.trim(),
-        }),
-      });
-      if (!res.ok) throw new Error("No se pudo crear el área");
-      const created = await res.json();
-      setAreas((prev) => [...prev, created]);
-      setNewAreaName("");
-      setNewAreaDescription("");
-      setShowAreaForm(false);
-    } catch (err) {
-      console.error(err);
-      alert(err.message || "Error al crear área");
-    } finally {
-      setCreatingArea(false);
-    }
-  };
+ const handleCreateArea = async () => {
+  if (!newAreaName.trim())
+    return alert("Escribe un nombre para la nueva área");
+
+  try {
+    setCreatingArea(true);
+
+ const tenantKey = localStorage.getItem("tenant_key") || "default";
+
+const res = await fetch(`${API_URL}/api/areas`, {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "X-Tenant": tenantKey,
+  },
+  body: JSON.stringify({
+    name: newAreaName.trim(),
+    description: newAreaDescription.trim(),
+  }),
+});
+
+
+    if (!res.ok) throw new Error("No se pudo crear el área");
+
+    const created = await res.json();
+    setAreas((prev) => [...prev, created]);
+    setNewAreaName("");
+    setNewAreaDescription("");
+    setShowAreaForm(false);
+  } catch (err) {
+    console.error(err);
+    alert(err.message || "Error al crear área");
+  } finally {
+    setCreatingArea(false);
+  }
+};
+
+
 
   const handleStartEditArea = (area) => {
     setEditingAreaId(area.id);
@@ -1222,14 +1527,20 @@ const handleSelectTable = async (area, table) => {
     if (!editingAreaName.trim()) return alert("El nombre del área no puede ir vacío");
     try {
       setSavingArea(true);
-      const res = await fetch(`${API_URL}/api/areas/${editingAreaId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: editingAreaName.trim(),
-          description: editingAreaDescription.trim(),
-        }),
-      });
+      const tenantKey = getTenantKeySafe();
+
+const res = await fetch(`${API_URL}/api/areas/${editingAreaId}`, {
+  method: "PUT",
+  headers: {
+    "Content-Type": "application/json",
+    "X-Tenant-Key": tenantKey,
+  },
+  body: JSON.stringify({
+    name: editingAreaName.trim(),
+    description: editingAreaDescription.trim(),
+  }),
+});
+
       if (!res.ok) throw new Error("No se pudo actualizar el área");
       const updated = await res.json();
       setAreas((prev) =>
@@ -1245,20 +1556,29 @@ const handleSelectTable = async (area, table) => {
   };
 
   const handleDeleteArea = async (areaId) => {
-    if (!window.confirm("¿Eliminar esta área y todas sus mesas?")) return;
-    try {
-      const res = await fetch(`${API_URL}/api/areas/${areaId}`, { method: "DELETE" });
-      if (!res.ok) throw new Error("No se pudo eliminar el área");
-      setAreas((prev) => prev.filter((a) => a.id !== areaId));
-      if (selectedArea?.id === areaId) {
-        setSelectedArea(null);
-        setSelectedTable(null);
-      }
-    } catch (err) {
-      console.error(err);
-      alert("No se pudo eliminar el área");
+  if (!window.confirm("¿Eliminar esta area y todas sus mesas?")) return;
+  try {
+    const tenantKey = getTenantKeySafe();
+
+    const res = await fetch(`${API_URL}/api/areas/${areaId}`, {
+      method: "DELETE",
+      headers: {
+        "X-Tenant-Key": tenantKey,
+      },
+    });
+
+    if (!res.ok) throw new Error("No se pudo eliminar el área");
+    setAreas((prev) => prev.filter((a) => a.id !== areaId));
+    if (selectedArea?.id === areaId) {
+      setSelectedArea(null);
+      setSelectedTable(null);
     }
-  };
+  } catch (err) {
+    console.error(err);
+    alert("No se pudo eliminar el área");
+  }
+};
+
 
 const handleCloseTable = () => {
   if (!isTurnoAbierto()) {
@@ -1269,30 +1589,43 @@ const handleCloseTable = () => {
 };
 
   const handleAddTableToArea = async (area) => {
-    const nombreMesa = window.prompt(
-      `Nombre de la nueva mesa en "${area.name}":`,
-      `Mesa ${(area.tables?.length || 0) + 1}`
-    );
-    if (!nombreMesa?.trim()) return;
+  const nombreMesa = window.prompt(
+    `Nombre de la nueva mesa en "${area.name}":`,
+    `Mesa ${(area.tables?.length || 0) + 1}`
+  );
+  if (!nombreMesa?.trim()) return;
 
-    try {
-      const res = await fetch(`${API_URL}/api/tables`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: nombreMesa.trim(), areaId: area.id }),
-      });
-      if (!res.ok) throw new Error("No se pudo crear la mesa");
-      const createdTable = await res.json();
-      setAreas((prev) =>
-        prev.map((a) =>
-          a.id === area.id ? { ...a, tables: [...(a.tables || []), createdTable] } : a
-        )
-      );
-    } catch (err) {
-      console.error(err);
-      alert(err.message || "Error al crear mesa");
-    }
-  };
+  try {
+    const tenantKey = getTenantKeySafe();
+
+    const res = await fetch(`${API_URL}/api/tables`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Tenant-Key": tenantKey,
+      },
+      body: JSON.stringify({
+        name: nombreMesa.trim(),
+        areaId: area.id,
+      }),
+    });
+
+    if (!res.ok) throw new Error("No se pudo crear la mesa");
+    const createdTable = await res.json();
+
+    setAreas((prev) =>
+      prev.map((a) =>
+        a.id === area.id
+          ? { ...a, tables: [...(a.tables || []), createdTable] }
+          : a
+      )
+    );
+  } catch (err) {
+    console.error(err);
+    alert(err.message || "Error al crear mesa");
+  }
+};
+
 
   // =======================
   // PEDIDOS (local por mesa)
@@ -1590,35 +1923,67 @@ const handleSaveOrder = async () => {
   try {
     const total = calcTotal(currentOrder.items);
 
-    const expandedItems = [];
-    currentOrder.items.forEach((item) => {
-      const promo = PROMO_MAPPINGS[item.name];
-      if (promo) {
-        expandedItems.push({
-          productId: item.productId,
-          name: promo.inventoryName,
-          price: promo.units > 0 ? Number(item.price) / promo.units : Number(item.price),
-          qty: Number(item.qty) * promo.units,
-          inventoryItemId: item.inventoryItemId ?? null,
-          menuRecipeId: item.menuRecipeId ?? null,
-        });
-      } else {
-        expandedItems.push({
-          productId: item.productId,
-          name: item.name,
-          price: Number(item.price),
-          qty: Number(item.qty),
-          inventoryItemId: item.inventoryItemId ?? null,
-          menuRecipeId: item.menuRecipeId ?? null,
-        });
-      }
-    });
+const expandedItems = [];
+currentOrder.items.forEach((item) => {
+  const invId =
+    item.inventoryItemId != null
+      ? Number(item.inventoryItemId)
+      : item.inventoryItemID != null
+      ? Number(item.inventoryItemID)
+      : null;
 
-    const payload = {
-      tableId: selectedTable.id,
-      items: expandedItems,
-      total: Number(total.toFixed(2)),
-    };
+  const recId =
+    item.menuRecipeId != null
+      ? Number(item.menuRecipeId)
+      : item.menuRecipeID != null
+      ? Number(item.menuRecipeID)
+      : null;
+
+  const promo = PROMO_MAPPINGS[item.name];
+
+  if (promo) {
+    expandedItems.push({
+      productId: item.productId,
+      name: promo.inventoryName,
+      price: promo.units > 0 ? Number(item.price) / promo.units : Number(item.price),
+      qty: Number(item.qty) * promo.units,
+
+      // ✅ mandamos ambas llaves (compat total)
+      inventoryItemId: invId,
+      inventoryItemID: invId,
+      menuRecipeId: recId,
+      menuRecipeID: recId,
+
+      displayName: item.displayName || item.name,
+      extras: Array.isArray(item.extras) ? item.extras : [],
+      note: item.note || "",
+    });
+  } else {
+    expandedItems.push({
+      productId: item.productId,
+      name: item.name,
+      price: Number(item.price),
+      qty: Number(item.qty),
+
+      // ✅ mandamos ambas llaves (compat total)
+      inventoryItemId: invId,
+      inventoryItemID: invId,
+      menuRecipeId: recId,
+      menuRecipeID: recId,
+
+      displayName: item.displayName || item.name,
+      extras: Array.isArray(item.extras) ? item.extras : [],
+      note: item.note || "",
+    });
+  }
+});
+
+const payload = {
+  tableId: selectedTable.id,
+  items: expandedItems,
+  total: Number(total.toFixed(2)),
+};
+
 
    // ✅ POST con timeout + error real (NO cambia lógica)
 const controller = new AbortController();
@@ -1626,12 +1991,15 @@ const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s
 
 let res;
 try {
-  res = await fetch(`${API_URL}/api/orders`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-    signal: controller.signal,
-  });
+res = await fetch(`${API_URL}/api/orders`, {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "X-Tenant-Key": localStorage.getItem("tenant_key") || "default",
+  },
+  body: JSON.stringify(payload),
+  signal: controller.signal,
+});
 } finally {
   clearTimeout(timeoutId);
 }
@@ -1692,20 +2060,32 @@ const handleLoadAdminSummary = async ({ silent = false } = {}) => {
       setSummaryError("");
     }
 
-    const todayKey = new Date().toLocaleDateString("en-CA");
-    const raw = localStorage.getItem(SHIFT_BASELINE_KEY(todayKey));
-    const baseline = raw
-      ? JSON.parse(raw)
-      : { sales: 0, orders: 0, grossSales: 0, cancelledSales: 0 };
+const todayKey = new Date().toLocaleDateString("en-CA");
+
+const tenantKeyRaw = localStorage.getItem("tenant_key");
+const tenantKey =
+  tenantKeyRaw && tenantKeyRaw !== "null" && tenantKeyRaw !== "undefined"
+    ? tenantKeyRaw
+    : "default";
+
+const raw = localStorage.getItem(`pos_shift_baseline_v1_${todayKey}_${tenantKey}`);
+const baseline = raw
+  ? JSON.parse(raw)
+  : { sales: 0, orders: 0, grossSales: 0, cancelledSales: 0 };
+
 
     const BASE_URL =
       typeof API_URL !== "undefined" && API_URL
         ? API_URL
         : "";
 
-    const res = await fetch(`${BASE_URL}/api/orders/admin/summary-today`, {
-      cache: "no-store",
-    });
+const res = await fetch(`${BASE_URL}/api/orders/admin/summary-today`, {
+  cache: "no-store",
+  headers: {
+    "X-Tenant-Key": tenantKey,
+  },
+});
+
 
     if (!res.ok) throw new Error("Respuesta no válida del servidor");
 
@@ -1823,7 +2203,19 @@ const loadRecentOrders = async ({ silent = false } = {}) => {
     }
     const BASE_URL = (typeof API_URL !== "undefined" && API_URL) ? API_URL : "";
 
-    const res = await fetch(`${BASE_URL}/api/orders`, { cache: "no-store" });
+    const tenantKeyRaw = localStorage.getItem("tenant_key");
+const tenantKey =
+  tenantKeyRaw && tenantKeyRaw !== "null" && tenantKeyRaw !== "undefined"
+    ? tenantKeyRaw
+    : "default";
+
+const res = await fetch(`${API_URL}/api/orders`, {
+  cache: "no-store",
+  headers: {
+    "X-Tenant-Key": tenantKey,
+  },
+});
+
     if (!res.ok) throw new Error("No se pudo cargar el historial");
     const data = await res.json();
     const list = Array.isArray(data) ? data.slice(0, 15) : [];
@@ -1853,6 +2245,7 @@ setRecentOrders(listFixed);
 };
 
 
+
 // =======================
 // CANCELAR / ROLLBACK (venta cerrada)
 // =======================
@@ -1868,10 +2261,20 @@ const handleCancelOrder = async (orderId, total = 0) => {
 
     const BASE_URL = (typeof API_URL !== "undefined" && API_URL) ? API_URL : "";
 
-    const res = await fetch(`${BASE_URL}/api/orders/cancel/${orderId}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-    });
+    const tenantKeyRaw = localStorage.getItem("tenant_key");
+const tenantKey =
+  tenantKeyRaw && tenantKeyRaw !== "null" && tenantKeyRaw !== "undefined"
+    ? tenantKeyRaw
+    : "default";
+
+const res = await fetch(`${BASE_URL}/api/orders/cancel/${orderId}`, {
+  method: "PUT",
+  headers: {
+    "Content-Type": "application/json",
+    "X-Tenant-Key": tenantKey,
+  },
+});
+
 
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data?.error || "No se pudo cancelar la venta");
@@ -1879,7 +2282,8 @@ const handleCancelOrder = async (orderId, total = 0) => {
 // ✅ AJUSTE PRO BASELINE (para que no se te vaya a 350 después de cancelar)
 try {
   const todayKey = new Date().toLocaleDateString("en-CA");
-  const raw = localStorage.getItem(SHIFT_BASELINE_KEY(todayKey));
+  const raw = localStorage.getItem(SHIFT_BASELINE_KEY_T(todayKey)
+(todayKey));
   const baseline = raw ? JSON.parse(raw) : { sales: 0, orders: 0 };
 
   const cancelledAmount = Number(total || 0);
@@ -1891,7 +2295,8 @@ try {
     orders: Math.max(0, (baseline.orders || 0) - 1),
   };
 
-  localStorage.setItem(SHIFT_BASELINE_KEY(todayKey), JSON.stringify(newBaseline));
+  localStorage.setItem(SHIFT_BASELINE_KEY_T(todayKey)
+(todayKey), JSON.stringify(newBaseline));
 } catch {}
 
 
@@ -1935,7 +2340,19 @@ setRecentOrders((prev) =>
     try {
       setLoadingLowStock(true);
       setLowStockError("");
-      const res = await fetch(`${API_URL}/api/orders/debug/inventory-items`, { cache: "no-store" });
+      const tenantKeyRaw = localStorage.getItem("tenant_key");
+const tenantKey =
+  tenantKeyRaw && tenantKeyRaw !== "null" && tenantKeyRaw !== "undefined"
+    ? tenantKeyRaw
+    : "default";
+
+const res = await fetch(`${API_URL}/api/orders/debug/inventory-items`, {
+  cache: "no-store",
+  headers: {
+    "x-tenant": tenantKey,
+  },
+});
+
       if (!res.ok) throw new Error("No se pudo cargar inventario");
       const data = await res.json();
       const list = Array.isArray(data) ? data : [];
@@ -1963,9 +2380,13 @@ setInventoryOptions(list); // ✅ refresca inventario real para el menú rápido
   // =======================
 const [reportFrom, setReportFrom] = useState("");
 const [reportTo, setReportTo] = useState("");
+const [reportsAutoLoaded, setReportsAutoLoaded] = useState(false);
+
 const [dailyReports, setDailyReports] = useState([]);
 const [loadingReports, setLoadingReports] = useState(false);
 const [reportsError, setReportsError] = useState("");
+const [ownerReport, setOwnerReport] = useState(null);
+
 
 // ✅ NUEVO: REPORTE PRO DEL DUEÑO (KPIs + Top + Ventas por mesa)
 
@@ -1973,23 +2394,48 @@ const [loadingOwnerReport, setLoadingOwnerReport] = useState(false);
 const [ownerError, setOwnerError] = useState("");
 const [loadingOwner, setLoadingOwner] = useState(false);
 
-const loadDailyReports = async () => {
+const loadDailyReports = async (fromQ = "", toQ = "") => {
   try {
     setLoadingReports(true);
     setReportsError("");
 
     const params = new URLSearchParams();
-    if (reportFrom) params.append("from", reportFrom);
-    if (reportTo) params.append("to", reportTo);
+
+    // ✅ override si viene desde auto-range o botón buscar
+    const f = fromQ || reportFrom;
+    const t = toQ || reportTo;
+
+    if (f) params.append("from", f);
+    if (t) params.append("to", t);
+
+    const tenantKey = getTenantKeySafe();
 
     const res = await fetch(
-      `${API_URL}/api/reports/daily${params.toString() ? `?${params.toString()}` : ""}`
+      `${API_URL}/api/reports/daily${params.toString() ? `?${params.toString()}` : ""}`,
+      {
+        headers: {
+          "X-Tenant-Key": tenantKey,
+        },
+      }
     );
 
     if (!res.ok) throw new Error("No se pudo cargar reportes diarios");
 
     const data = await res.json();
-    setDailyReports(Array.isArray(data) ? data : []);
+
+    // ✅ COMPAT: si el backend manda { dailyReports: [], ownerReport: {} }
+    const list =
+      (data && Array.isArray(data.dailyReports) && data.dailyReports) ||
+      (data && Array.isArray(data.reports) && data.reports) ||
+      (Array.isArray(data) ? data : []);
+
+    setDailyReports(list);
+
+    // ✅ COMPAT: si viene ownerReport en el mismo endpoint, lo guardamos también
+    // (evita ownerReport is not defined y te regresa KPIs/Top/Mesas para UI)
+    if (data && data.ownerReport !== undefined) {
+      setOwnerReport(data.ownerReport);
+    }
   } catch (err) {
     console.error(err);
     setReportsError(err.message || "Error al cargar reportes diarios");
@@ -1998,21 +2444,29 @@ const loadDailyReports = async () => {
   }
 };
 
-const [ownerReport, setOwnerReport] = useState(null);
-
-
 
 // =======================
 // REPORTE PRO DEL DUEÑO
 // =======================
-const loadOwnerReport = async () => {
+const loadOwnerReport = async (fromOverride, toOverride) => {
   try {
     setLoadingOwnerReport(true);
     setOwnerError("");
 
+    // ✅ (aunque este endpoint no use fechas, dejamos el override listo sin romper nada)
+    const fromQ = fromOverride ?? reportFrom;
+    const toQ = toOverride ?? reportTo;
+    void fromQ;
+    void toQ;
+
     // ✅ usa endpoint REAL que sí tienes en orders.routes.js
+    const tenantKey = getTenantKeySafe();
+
     const res = await fetch(`${API_URL}/api/orders/admin/summary`, {
       cache: "no-store",
+      headers: {
+        "X-Tenant-Key": tenantKey,
+      },
     });
 
     if (!res.ok) throw new Error("No se pudo cargar el reporte del dueño");
@@ -2036,6 +2490,7 @@ const loadOwnerReport = async () => {
     setLoadingOwnerReport(false);
   }
 };
+
 
   const handleExportDailyReports = () => {
     if (!dailyReports || dailyReports.length === 0) return alert("No hay reportes para exportar.");
@@ -2074,6 +2529,11 @@ const loadOwnerReport = async () => {
   const [cashCount, setCashCount] = useState("");
   const [cashMoves, setCashMoves] = useState([]);
 const [showCloseDayModal, setShowCloseDayModal] = useState(false);
+const cashHydratedRef = useRef(false);
+const tenantKeyStable = useMemo(() => getTenantKeySafe(), []);
+;
+
+
 
 
 
@@ -2090,23 +2550,56 @@ const todayKey = useMemo(() => {
 
  
 // keys por día (NO redefinir CASH_MOVES_KEY aquí)
-const cashMovesKeyToday = CASH_MOVES_KEY(todayKey);
+
+const cashMovesKeyToday = `pos_cash_moves_v1_${todayKey}_${tenantKeyStable}`;
+
+const cashCountKeyToday = `pos_cash_count_v1_${todayKey}_${tenantKeyStable}`;
+
+
+
+
 const shiftBaselineKeyToday = SHIFT_BASELINE_KEY(todayKey);
 
+// 1️⃣ Cargar desde localStorage (SOLO lee)
+useEffect(() => {
+  try {
+    const raw = localStorage.getItem(cashMovesKeyToday);
+    if (raw) setCashMoves(JSON.parse(raw));
+  } catch {}
+}, [cashMovesKeyToday]);
 
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(cashMovesKeyToday);
+// 2️⃣ Guardar en localStorage (NO pisa con vacío en mount)
+useEffect(() => {
+  if (cashMoves.length === 0) return; // 👈 CLAVE: evita borrar al refrescar
+  try {
+    localStorage.setItem(cashMovesKeyToday, JSON.stringify(cashMoves));
+  } catch {}
+}, [cashMoves, cashMovesKeyToday]);
 
-      if (raw) setCashMoves(JSON.parse(raw));
-    } catch {}
-  }, [CASH_MOVES_KEY]);
 
-  useEffect(() => {
-    try {
-      localStorage.setItem(cashMovesKeyToday, JSON.stringify(moves));
-    } catch {}
-  }, [cashMoves, CASH_MOVES_KEY]);
+const cashCountHydratedRef = useRef(false);
+
+useEffect(() => {
+  cashCountHydratedRef.current = false;
+  try {
+    const raw = localStorage.getItem(cashCountKeyToday);
+    setCashCount(raw ? String(raw) : "");
+  } catch {
+    setCashCount("");
+  } finally {
+    cashCountHydratedRef.current = true;
+  }
+}, [cashCountKeyToday]);
+
+useEffect(() => {
+  if (!cashCountHydratedRef.current) return;
+  try {
+    localStorage.setItem(cashCountKeyToday, String(cashCount || ""));
+  } catch {}
+}, [cashCount, cashCountKeyToday]);
+
+
+
 
   const sumIn = cashMoves
     .filter((m) => m.type === "in")
@@ -2117,9 +2610,18 @@ const shiftBaselineKeyToday = SHIFT_BASELINE_KEY(todayKey);
   const netMoves = sumIn - sumOut;
 
 useEffect(() => {
-  const { from, to } = getAutoRange(7); // 🔥 PRO: últimos 7 días
+  if (reportsAutoLoaded) return;
+
+  const { from, to } = getAutoRange(7); // últimos 7 días
+  setReportFrom(from);
+  setReportTo(to);
+
   loadDailyReports(from, to);
-}, []);
+  loadOwnerReport(); // tu resumen admin/summary
+
+  setReportsAutoLoaded(true);
+}, [reportsAutoLoaded]);
+
 
 
 
@@ -2260,12 +2762,37 @@ const closeCloseDayModal = () => {
 const handleSendWhatsAppDailySummary = async () => {
   try {
     // 1) Traer reporte real del día (ventas + pagos por método)
-    const res = await fetch(`${API_URL}/api/reports/today`);
+   const tenantKey = getTenantKeySafe();
+
+const res = await fetch(`${API_URL}/api/reports/today`, {
+  headers: {
+    "X-Tenant-Key": tenantKey,
+  },
+});
+
+const tenantPlan = localStorage.getItem("tenant_plan") || "FREE";
+if (tenantPlan === "FREE") {
+  alert("WhatsApp no disponible en el plan FREE");
+  return;
+}
+
+
     if (!res.ok) {
       alert("No se pudo leer el reporte del día");
       return;
     }
     const todayReport = await res.json();
+  
+
+    // ✅ Anti-crash: si el backend regresa null/undefined, no truena
+    const safeReport =
+      todayReport && typeof todayReport === "object" ? todayReport : {};
+
+    if (!todayReport) {
+      // opcional: aviso, pero no detiene si quieres mandar ceros
+      // alert("Reporte del día vacío. Se enviará en ceros.");
+    }
+
 
     // 2) Pedir número
     const phone = prompt("Número de WhatsApp (con lada, ej. 521XXXXXXXXXX):");
@@ -2277,13 +2804,12 @@ const handleSendWhatsAppDailySummary = async () => {
         Number(n || 0)
       );
 
-    const totalOrders = Number(todayReport.totalOrders || 0);
-    const totalSales = Number(todayReport.totalSales || 0);
+    const totalOrders = Number(safeReport.totalOrders || 0);
+    const totalSales = Number(safeReport.totalSales || 0);
 
-    // 👇 ESTO ES LO IMPORTANTE (métodos de pago)
-    const cash = Number(todayReport.paymentCash || 0);
-    const card = Number(todayReport.paymentCard || 0);
-    const transfer = Number(todayReport.paymentTransfer || 0);
+    const cash = Number(safeReport.paymentCash || 0);
+    const card = Number(safeReport.paymentCard || 0);
+    const transfer = Number(safeReport.paymentTransfer || 0);
 
     const avgTicket = totalOrders > 0 ? totalSales / totalOrders : 0;
 
@@ -2340,7 +2866,16 @@ async function handleCloseDay() {
 
   // ✅ 0) Generar corte en backend (esto llena DailyReport)
   try {
-    const res = await fetch(`${BASE_URL}/api/reports/close-day`, { method: "POST" });
+    const tenantKey = getTenantKeySafe();
+
+const res = await fetch(`${BASE_URL}/api/reports/close-day`, {
+  method: "POST",
+  headers: {
+    "X-Tenant-Key": tenantKey,
+  },
+});
+
+
 
     if (!res.ok) throw new Error("No se pudo generar el corte en el servidor");
   } catch (e) {
@@ -2354,7 +2889,20 @@ async function handleCloseDay() {
 
   try {
    // 1) Traer resumen real DEL DÍA (antes del corte)
-const resSum = await fetch(`${BASE_URL}/api/orders/admin/summary-today`, { cache: "no-store" });
+const tenantKeyRaw = localStorage.getItem("tenant_key");
+const tenantKey =
+  tenantKeyRaw && tenantKeyRaw !== "null" && tenantKeyRaw !== "undefined"
+    ? tenantKeyRaw
+    : "default";
+const baselineKey = `pos_shift_baseline_v1_${todayKey}_${tenantKey}`;
+
+const resSum = await fetch(`${BASE_URL}/api/orders/admin/summary-today`, {
+  cache: "no-store",
+  headers: {
+    "X-Tenant-Key": tenantKey,
+  },
+});
+
 if (!resSum.ok) throw new Error("No se pudo leer resumen para cierre");
 
 // ✅ FIX: el JSON viene de resSum (no de "res")
@@ -2364,18 +2912,20 @@ const backendOrders = Number(data?.totalOrders || 0);
 
 // 2) Guardar baseline (shift) = “hasta aquí quedó el día”
 localStorage.setItem(
-  SHIFT_BASELINE_KEY(todayKey),
+  baselineKey,
   JSON.stringify({
-    sales: backendSales,                 // netas (como ya lo tienes)
+    sales: backendSales,
     orders: backendOrders,
-    grossSales: Number(data?.grossSales || 0),           // ✅ nuevo
-    cancelledSales: Number(data?.cancelledSales || 0),   // ✅ nuevo
+    grossSales: Number(data?.grossSales || 0),
+    cancelledSales: Number(data?.cancelledSales || 0),
     closedAt: new Date().toISOString(),
   })
 );
 
+
 // 3) Limpiar caja del día (por key del día)
-localStorage.removeItem(CASH_MOVES_KEY(todayKey));
+localStorage.removeItem(`pos_cash_moves_v1_${todayKey}_${tenantKey}`);
+
 setCashMoves([]);
 setCashCount("");
 
@@ -2401,11 +2951,46 @@ const handleMenuFieldChange = (id, field, value) => {
       p.id === id ? { ...p, [field]: value } : p
     );
     try {
-      localStorage.setItem("pos_quick_products", JSON.stringify(updated));
+      localStorage.setItem(QUICK_KEY, JSON.stringify(updated));
     } catch {}
     return updated;
   });
 };
+
+// ======================
+// QUICK MENU - DB (PUT) autosave
+// ======================
+const quickSaveTimerRef = useRef(null);
+
+useEffect(() => {
+  // Solo autosave si ya hidrató (evita guardar basura al arrancar)
+  if (!quickHydratedRef.current) return;
+  if (!isAdmin) return;
+  if (!showMenuEditor) return;
+
+  if (quickSaveTimerRef.current) clearTimeout(quickSaveTimerRef.current);
+
+  quickSaveTimerRef.current = setTimeout(async () => {
+    try {
+      const base = import.meta.env.VITE_API_URL || "http://localhost:4000";
+      await fetch(`${base}/api/quick-products`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          ...tenantHeaders(),
+        },
+        body: JSON.stringify({ items: quickProducts }),
+      });
+    } catch {
+      // silencioso para no romper
+    }
+  }, 700);
+
+  return () => {
+    if (quickSaveTimerRef.current) clearTimeout(quickSaveTimerRef.current);
+  };
+}, [quickProducts, showMenuEditor, isAdmin]);
+
 
 useEffect(() => {
   if (!isAdmin) {
@@ -2418,7 +3003,15 @@ useEffect(() => {
 const loadRecipeOptions = async () => {
   try {
     const BASE_URL = typeof API_URL !== "undefined" && API_URL ? API_URL : "";
-    const res = await fetch(`${BASE_URL}/api/menu-recipes`, { cache: "no-store" });
+    const tenantKey = getTenantKeySafe();
+
+const res = await fetch(`${BASE_URL}/api/menu-recipes`, {
+  cache: "no-store",
+  headers: {
+    "X-Tenant-Key": tenantKey,
+  },
+});
+
     if (!res.ok) return;
     const data = await res.json();
     setRecipeOptions(Array.isArray(data) ? data : []);
@@ -2429,16 +3022,36 @@ const MAX_EXTRAS = 2;
 const MIN_EXTRAS = 1; // ← si NO quieres obligatorio, pon 0
 
 
+function getTenantKeySafe() {
+  const t = localStorage.getItem("tenant_key");
+  return t && t !== "null" && t !== "undefined" ? t : "default";
+}
 
+// Helper estándar para headers (RECOMENDADO)
+function tenantHeaders(extra = {}) {
+  return {
+    ...extra,
+    "Content-Type": "application/json",
+    "X-Tenant-Key": getTenantKeySafe(),
+  };
+}
+
+// Detectar tenant por subdominio
+const host = window.location.hostname; // ej: cliente1.tudominio.com
+const parts = host.split(".");
+if (parts.length >= 3) {
+  const subdomain = parts[0];
+  localStorage.setItem("tenant_key", subdomain);
+}
 
 
   // =======================
   // RENDER
   // =======================
   return (
-    <LoginGate>
-      <PosShell
-        appName="POS"
+<LoginGate>
+<PosShell
+appName="POS"
         subtitle="Panel interno"
         topbarLeft={
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -2745,68 +3358,75 @@ const MIN_EXTRAS = 1; // ← si NO quieres obligatorio, pon 0
         <button
           type="button"
           disabled={closingTable}
-          onClick={async () => {
-if (!isTurnoAbierto()) {
-  alert("⛔ Turno cerrado. Abre turno para cobrar.");
-  return;
-}
-            try {
-              setClosingTable(true);
-              await fetch(
-                `${API_URL}/api/orders/close-table/${selectedTable.id}`,
-                {
-                  method: "PUT",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    paymentMethod: closePaymentMethod,
-                    paymentRef:
-                      closePaymentMethod === "TRANSFER"
-                        ? closePaymentRef
-                        : "",
-                  }),
-                }
-              );
+         onClick={async () => {
+  if (!isTurnoAbierto()) {
+    alert("⛔ Turno cerrado. Abre turno para cobrar.");
+    return;
+  }
 
-// 🖨️ Imprimir ticket (si existe printTicket / QZ listo)
-try {
-  const currentOrder = ordersByTable[selectedTable.id] || { items: [] };
+  try {
+    setClosingTable(true);
+    const tenantKey = getTenantKeySafe();
 
-  // ✅ IMPORTANTE: aquí llama TU función real de impresión
-  // (la que ya usas en "Imprimir prueba" / QZ Tray)
-  await printTicket({
-    table: selectedTable,
-    items: currentOrder.items,
-    paymentMethod: closePaymentMethod,
-    paymentRef: closePaymentRef,
-  });
-} catch (e) {
-  console.warn("printTicket falló:", e);
-}
+    await fetch(
+      `${API_URL}/api/orders/close-table/${selectedTable.id}`,
+      {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Tenant-Key": tenantKey,
+        },
+        body: JSON.stringify({
+          paymentMethod: closePaymentMethod,
+          paymentRef:
+            closePaymentMethod === "TRANSFER"
+              ? closePaymentRef
+              : "",
+        }),
+      }
+    );
 
+    // 🖨️ Imprimir ticket (si existe printTicket / QZ listo)
+    try {
+      const currentOrder = ordersByTable[selectedTable.id] || { items: [] };
 
-              alert("✅ Cuenta cerrada");
-setOpenTableIds((prev) => {
-  const next = new Set(prev);
-  next.delete(selectedTable.id);
-  return next;
-});
+      // ✅ IMPORTANTE: aquí llama TU función real de impresión
+      // (la que ya usas en "Imprimir prueba" / QZ Tray)
+      await printTicket({
+        table: selectedTable,
+        items: currentOrder.items,
+        paymentMethod: closePaymentMethod,
+        paymentRef: closePaymentRef,
+      });
+    } catch (e) {
+      console.warn("printTicket falló:", e);
+    }
 
-              setShowCloseModal(false);
-              setClosePaymentRef("");
-              setClosePaymentMethod("CASH");
+    alert("✅ Cuenta cerrada");
 
-              // limpia la mesa en frontend
-              setOrdersByTable((prev) => ({
-                ...prev,
-                [selectedTable.id]: { items: [] },
-              }));
-            } catch (err) {
-              console.error(err);
-              alert("❌ Error al cerrar cuenta");
-            } finally {
-              setClosingTable(false);
-            }
-          }}
+    setOpenTableIds((prev) => {
+      const next = new Set(prev);
+      next.delete(selectedTable.id);
+      return next;
+    });
+
+    setShowCloseModal(false);
+    setClosePaymentRef("");
+    setClosePaymentMethod("CASH");
+
+    // limpia la mesa en frontend
+    setOrdersByTable((prev) => ({
+      ...prev,
+      [selectedTable.id]: { items: [] },
+    }));
+  } catch (err) {
+    console.error(err);
+    alert("❌ Error al cerrar cuenta");
+  } finally {
+    setClosingTable(false);
+  }
+}}
+
           style={{
             padding: "8px 14px",
             borderRadius: 10,
@@ -3034,6 +3654,7 @@ setOpenTableIds((prev) => {
     Copiar corte
   </button>
 
+{tenantPlan !== "FREE" && (
 <button
   onClick={handleSendWhatsAppDailySummary}
   style={{
@@ -3049,7 +3670,7 @@ setOpenTableIds((prev) => {
 >
   Enviar WhatsApp
 </button>
-
+)}
 
 
   {/* ✅ TURNO GLOBAL (solo Admin) */}
@@ -4765,20 +5386,19 @@ boxShadow: noStock ? "none" : `0 0 0 1px ${catColor}40`,
 
     // ✅ si eliges receta, opcionalmente limpiamos inventoryItemId para evitar confusión
     handleMenuFieldChange(p.id, "menuRecipeId", val);
-    if (val) handleMenuFieldChange(p.id, "inventoryItemId", null);
+// IMPORTANTE: NO borrar inventoryItemId aquí.
+// Tu backend descuenta por inventoryItemId; si lo pones en null, no descuenta nada.
+
   }}
   style={editorSelectStyle}
-
-
 >
   <option value="">(Sin receta)</option>
   {recipeOptions.map((r) => (
     <option key={r.id} value={r.id}>
-      {r.name}
+      {r.menuName || r.name}
     </option>
   ))}
 </select>
-
 
 <select
   value={p.allowExtras ? "yes" : "no"}
@@ -4787,10 +5407,10 @@ boxShadow: noStock ? "none" : `0 0 0 1px ${catColor}40`,
   }
   style={editorSelectStyle}
 >
-
   <option value="no">Sin extras</option>
   <option value="yes">Con extras</option>
 </select>
+
 
 {p?.allowExtras && (
   <div
@@ -4877,30 +5497,38 @@ boxShadow: noStock ? "none" : `0 0 0 1px ${catColor}40`,
 
 
 
-              {/* INVENTARIO */}
-              <select
-                value={p.inventoryItemId ?? ""}
-                onChange={(e) => handleMenuFieldChange(p.id, "inventoryItemId", e.target.value)}
-                style={{
-                  width: "100%",
-                  minWidth: 0,
-                  padding: "8px 10px",
-                  borderRadius: 12,
-                  border: "1px solid rgba(75,85,99,0.9)",
-                  backgroundColor: "rgba(15,23,42,0.96)",
-                  color: "var(--pos-text, #e5e7eb)",
-                  fontSize: 11,
-boxSizing: "border-box",
-height: 40,
-                }}
-              >
-                <option value="">(Sin inventario)</option>
-                {(inventoryOptions || []).map((it) => (
-                  <option key={it.id} value={it.id}>
-                    {it.name}
-                  </option>
-                ))}
-              </select>
+{/* INVENTARIO */}
+<select
+ value={p.inventoryItemId ? String(p.inventoryItemId) : ""}
+onChange={(e) =>
+  handleMenuFieldChange(p.id, "inventoryItemId", e.target.value ? Number(e.target.value) : null)
+}
+  style={{
+    width: "100%",
+    minWidth: 0,
+    padding: "8px 10px",
+    borderRadius: 12,
+    border: "1px solid rgba(75,85,99,0.9)",
+    backgroundColor: "rgba(15,23,42,0.96)",
+    color: "var(--pos-text, #e5e7eb)",
+    fontSize: 11,
+    boxSizing: "border-box",
+    height: 40,
+  }}
+>
+  <option value="">(Sin inventario)</option>
+<option value="">DEBUG: {Array.isArray(inventoryOptions) ? inventoryOptions.length : "NO_ARRAY"}</option>
+
+
+  {(inventoryOptions || []).map((it) => (
+    <option key={it.id} value={String(it.id)}>
+
+      {it.name ?? it.nombre ?? `Item #${it.id}`}
+
+    </option>
+  ))}
+</select>
+
 
               {/* ELIMINAR */}
               <button
@@ -5494,28 +6122,60 @@ const isCancelled =
 
 
                 <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
-                  {(Array.isArray(o.items) ? o.items : []).map((it, idx) => (
-                    <div
-                      key={`${o.id || "o"}-${idx}`}
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        gap: 8,
-                        fontSize: 12,
-                        padding: "6px 8px",
-                        borderRadius: 10,
-                        border: "1px solid rgba(148,163,184,0.18)",
-                        backgroundColor: "rgba(15,23,42,0.55)",
-                      }}
-                    >
-                      <span style={{ opacity: 0.95 }}>
-                        {it.name} <span style={{ opacity: 0.75 }}>x {Number(it.qty || 1)}</span>
-                      </span>
-                      <span style={{ opacity: 0.9 }}>
-                        {fmtMoney(Number(it.price || 0) * Number(it.qty || 1))}
-                      </span>
-                    </div>
-                  ))}
+               {(Array.isArray(o.items) ? o.items : []).map((it, idx) => {
+  const qty = Number(it.qty || 1);
+  const price = Number(it.price || 0);
+
+  return (
+    <div
+      key={`${o.id || "o"}-${idx}`}
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        gap: 8,
+        fontSize: 12,
+        padding: "6px 8px",
+        borderRadius: 10,
+        border: "1px solid rgba(148,163,184,0.18)",
+        backgroundColor: "rgba(15,23,42,0.55)",
+      }}
+    >
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <div style={{ opacity: 0.95 }}>
+          {(it.displayName || it.name)}{" "}
+          <span style={{ opacity: 0.75 }}>x {qty}</span>
+        </div>
+
+        {/* ✅ EXTRAS (para cocina) */}
+        {Array.isArray(it.extras) && it.extras.length > 0 && (
+          <div style={{ display: "grid", gap: 2 }}>
+            {it.extras.map((ex) => (
+              <div
+                key={ex.id || ex.name}
+                style={{ fontSize: 11, opacity: 0.9, fontWeight: 700 }}
+              >
+                • {ex.name} ({fmtMoney(Number(ex.price || 0))})
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* ✅ NOTA (para cocina) */}
+        {String(it.note || "").trim() && (
+          <div style={{ fontSize: 11, opacity: 0.85 }}>
+            <span style={{ fontWeight: 900 }}>Nota:</span> {String(it.note).trim()}
+          </div>
+        )}
+      </div>
+
+      <div style={{ opacity: 0.9, alignSelf: "flex-start" }}>
+        {fmtMoney(price * qty)}
+      </div>
+    </div>
+  );
+})}
+
+
 
                   {(!o.items || o.items.length === 0) && (
                     <p style={{ fontSize: 12, opacity: 0.75, margin: 0 }}>
@@ -5535,12 +6195,36 @@ const isCancelled =
 
 
         {/* ===== REPORTES ===== */}
-<pre style={{ fontSize: 11, opacity: 0.8 }}>
-  {({ dailyReports, ownerReport }, null, 2)}
-</pre>
-
+{/*
+{tenantPlan !== "FREE" && (
+  <pre style={{ fontSize: 11, opacity: 0.8 }}>
+    {JSON.stringify({ dailyReports, ownerReport }, null, 2)}
+  </pre>
+)}
+*/}
         {activeTab === "reportes" && (
-          <Accordion title="Reportes diarios" defaultOpen={true}>
+  tenantPlan === "FREE" ? (
+    <div
+      style={{
+        padding: 14,
+        borderRadius: 16,
+        border: "1px solid rgba(239,68,68,0.35)",
+        background: "rgba(2,6,23,0.35)",
+        color: "var(--pos-text, #e5e7eb)",
+        marginTop: 10,
+      }}
+    >
+      <div style={{ fontWeight: 1000, marginBottom: 6 }}>
+        🔒 Reportes bloqueados
+      </div>
+      <div style={{ fontSize: 12, opacity: 0.85 }}>
+        Tu plan es <b>{tenantPlan}</b>. Para usar reportes necesitas <b>PRO</b> o <b>FULL</b>.
+      </div>
+    </div>
+  ) : (
+
+  <Accordion title="Reportes diarios" defaultOpen={true}>
+
 
 
             <Section title="Buscar reportes">
@@ -5948,10 +6632,30 @@ const isCancelled =
 </div>
             </Section>
           </Accordion>
+)
         )}
 
         {/* ===== INVENTARIO ===== */}
         {activeTab === "invent" && (
+  tenantPlan !== "FULL" ? (
+    <div
+      style={{
+        padding: 14,
+        borderRadius: 16,
+        border: "1px solid rgba(239,68,68,0.35)",
+        background: "rgba(2,6,23,0.35)",
+        color: "var(--pos-text, #e5e7eb)",
+        marginTop: 10,
+      }}
+    >
+      <div style={{ fontWeight: 1000, marginBottom: 6 }}>
+        🔒 Inventario bloqueado
+      </div>
+      <div style={{ fontSize: 12, opacity: 0.85 }}>
+        Tu plan es <b>{tenantPlan}</b>. Para usar inventario necesitas <b>FULL</b>.
+      </div>
+    </div>
+  ) : (
           <>
             <Section title="Inventario bajo">
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
@@ -6003,6 +6707,7 @@ const isCancelled =
                     </div>
                   ))}
                 </div>
+
               )}
 
             </Section>
@@ -6037,6 +6742,7 @@ const isCancelled =
               <InventoryPanel />
             </Section>
           </>
+)
         )}
 
 {showRecipesPro && (

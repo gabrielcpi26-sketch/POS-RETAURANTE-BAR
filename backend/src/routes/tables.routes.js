@@ -11,12 +11,12 @@ const router = express.Router();
  */
 router.get("/", async (req, res) => {
   try {
-    const tables = await prisma.table.findMany({
-      include: {
-        area: true, // para saber a qué área pertenece cada mesa
-      },
-      orderBy: { id: "asc" },
-    });
+  const tables = await prisma.table.findMany({
+  where: { tenantId: req.tenantId },
+  include: { area: true },
+  orderBy: { id: "asc" },
+});
+
 
     res.json(tables);
   } catch (err) {
@@ -66,15 +66,16 @@ router.post("/", async (req, res) => {
       finalNumber = lastTable ? (lastTable.number || 0) + 1 : 1;
     }
 
-    const table = await prisma.table.create({
-      data: {
-        name,
-        number: finalNumber,
-        areaId: areaIdNumber,
-        capacity: capacity ?? 4,
-        isActive: true,
-      },
-    });
+ const table = await prisma.table.create({
+  data: {
+    tenantId: req.tenantId,
+    name,
+    number: finalNumber,
+    areaId: areaIdNumber,
+    capacity: capacity ?? 4,
+    isActive: true,
+  },
+});
 
     res.status(201).json(table);
   } catch (err) {

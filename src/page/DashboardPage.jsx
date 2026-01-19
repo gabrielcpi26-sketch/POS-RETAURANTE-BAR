@@ -1849,6 +1849,7 @@ POS Mini-App PRO
 
 
 
+
 // ======================
 // CERRAR DÍA (corte + cerrar turno)
 // ======================
@@ -1863,28 +1864,33 @@ async function handleCloseDay() {
   );
   if (!ok) return;
 
-// ✅ 0) Generar corte en backend (esto llena DailyReport)
-try {
-  const res = await fetch(`${API_URL}/api/reports/close-day`, { method: "POST" });
-  if (!res.ok) throw new Error("No se pudo generar el corte en el servidor");
-} catch (e) {
+   // ✅ PON ESTO AQUÍ ARRIBA (ANTES DE TODO)
+  const BASE_URL = import.meta.env.VITE_API_URL || "";
 
-  alert("⚠️ No se generó el corte en servidor. Revisa backend.\n" + (e.message || ""));
-  return; // ⛔ no limpies nada si no se guardó el corte
-}
-
+  // ✅ 0) Generar corte en backend (esto llena DailyReport)
+  try {
+    const resReport = await fetch(`${BASE_URL}/api/reports/close-day`, {
+      method: "POST",
+    });
+    if (!resReport.ok) throw new Error("No se pudo generar el corte en el servidor");
+  } catch (e) {
+    alert(
+      "⚠️ No se generó el corte en servidor. Revisa backend.\n" +
+        (e?.message || "")
+    );
+    return; // ⛔ no limpies nada si no se guardó el corte
+  }
 
   const todayKey = new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD local
 
   try {
-    // 1) Traer resumen real DEL DÍA (antes del corte)
-   const res = await fetch(
-  `${import.meta.env.VITE_API_URL}/api/orders/admin/summary`
-);
+    // 1) Traer resumen real DEL DÍA (antes del corte) para baseline
+    const resSummary = await fetch(`${BASE_URL}/api/orders/admin/summary`, {
+      cache: "no-store",
+    });
+    if (!resSummary.ok) throw new Error("No se pudo leer resumen para cierre");
 
-    if (!res.ok) throw new Error("No se pudo leer resumen para cierre");
-
-    const data = await res.json();
+    const data = await resSummary.json();
     const backendSales = Number(data?.totalSales || 0);
     const backendOrders = Number(data?.totalOrders || 0);
 
@@ -1903,14 +1909,22 @@ try {
     setCashMoves([]);
     setCashCount("");
 
-    // 4) (Opcional) endpoint de cierre
-try {
-  await fetch(
-    `${import.meta.env.VITE_API_URL}/api/orders/close-day`,
-    { method: "POST" }
-  );
-} catch {}
+    // 4) endpoint de cierre (orders.close-day)
+    try {
+      const resClose = await fetch(`${BASE_URL}/api/orders/close-day`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
 
+      if (!resClose.ok) {
+        const txt = await resClose.text().catch(() => "");
+        throw new Error(`close-day falló: ${resClose.status} ${txt}`);
+      }
+    } catch (errClose) {
+      // Si quieres que sea “opcional”, quita este throw.
+      // Pero ahorita lo dejamos estricto para que te avise si falla.
+      throw errClose;
+    }
 
     // 5) Refrescar resumen (ya debe dar 0/0 por baseline)
     await handleLoadAdminSummary();
@@ -1922,24 +1936,7 @@ try {
   }
 }
 
-const handleMenuFieldChange = (id, field, value) => {
-  setQuickProducts((prev) => {
-    const updated = prev.map((p) =>
-      p.id === id ? { ...p, [field]: value } : p
-    );
-    try {
-      localStorage.setItem("pos_quick_products", JSON.stringify(updated));
-    } catch {}
-    return updated;
-  });
-};
-
-useEffect(() => {
-  if (!isAdmin) {
-    setActiveTab("mesas");
-  }
-}, [isAdmin]);
-
+ const handleMenuFieldChange = (id, field, value) => { setQuickProducts((prev) => { const updated = prev.map((p) => p.id === id ? { ...p, [field]: value } : p ); try { localStorage.setItem("pos_quick_products", JSON.stringify(updated)); } catch {} return updated; }); }; useEffect(() => { if (!isAdmin) { setActiveTab("mesas"); } }, [isAdmin]);
 
   // =======================
   // RENDER
@@ -3709,25 +3706,72 @@ boxShadow: noStock ? "none" : `0 0 0 1px ${catColor}40`,
                 ))}
               </select>
 
-              {/* NOMBRE */}
-              <input
-                value={p.name}
-                onDoubleClick={(e) => e.target.select()}
-                placeholder="Nombre"
-                onChange={(e) => handleMenuFieldChange(p.id, "name", e.target.value)}
-                style={{
-                  width: "100",
-                  minWidth: 0,
-                  width: "100%",
-                  padding: "8px 10px",
-                  borderRadius: 13,
-                  border: "1px solid rgba(75,85,99,0.9)",
-                  backgroundColor: "rgba(15,23,42,0.96)",
-                  color: "var(--pos-text, #e5e7eb)",
-                  fontSize: 11,
-                  fontWeight: 800,
-                }}
-              />
+            {/* NOMBRE (VISIBLE PARA MESERO) */}
+<input
+  value={p.displayName ?? ""}
+  onDoubleClick={(e) => e.target.select()}
+  placeholder="Nombre visible (ej. Hamburguesa de pollo)"
+  onChange={(e) => handleMenuFieldChange(p.id, "displayName", e.target.value)}
+  style={{
+    width: "100%",
+    minWidth: 0,
+    padding: "8px 10px",
+    borderRadius: 13,
+    border: "1px solid rgba(75,85,99,0.9)",
+    backgroundColor: "rgba(15,23,42,0.96)",
+    color: "var(--pos-text, #e5e7eb)",
+    fontSize: 11,
+    fontWeight: 800,
+  }}
+/>
+
+{/* INVENTARIO (BASE / MATCH) */}
+<select
+  value={p.inventoryItemId ?? ""}
+  onChange={(e) => {
+    const val = e.target.value;
+    if (!val) {
+      // quitar link inventario
+      handleMenuFieldChange(p.id, "inventoryItemId", null);
+      return;
+    }
+
+    const selectedId = Number(val);
+    const inv = inventoryOptions.find((x) => Number(x.id) === selectedId);
+
+    handleMenuFieldChange(p.id, "inventoryItemId", selectedId);
+
+    // 🔒 PRO: name siempre será el nombre REAL del inventario (match)
+    if (inv?.name) {
+      handleMenuFieldChange(p.id, "name", inv.name);
+
+      // Si no hay displayName, autollenar con algo amigable
+      if (!p.displayName || String(p.displayName).trim() === "") {
+        handleMenuFieldChange(p.id, "displayName", inv.name);
+      }
+    }
+  }}
+  style={{
+    width: "100%",
+    minWidth: 0,
+    padding: "8px 10px",
+    borderRadius: 12,
+    border: "1px solid rgba(75,85,99,0.9)",
+    backgroundColor: "rgba(15,23,42,0.96)",
+    color: "var(--pos-text, #e5e7eb)",
+    fontSize: 11,
+    fontWeight: 800,
+  }}
+  title="Inventario que se descuenta"
+>
+  <option value="">(Sin inventario)</option>
+  {inventoryOptions.map((i) => (
+    <option key={i.id} value={i.id}>
+      {i.name}
+    </option>
+  ))}
+</select>
+
 
               {/* FOTO (compacta) - en edición NO se muestra preview para que no ocupe espacio */}
 <div style={{ display: "flex", gap: 10, alignItems: "center", minWidth: 0 }}>

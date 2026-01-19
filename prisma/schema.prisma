@@ -60,18 +60,27 @@ model Order {
 }
 
 model DailyReport {
-  id            Int      @id @default(autoincrement())
-  date          DateTime @unique
-  totalOrders   Int
-  totalSales    Float
+  id              Int      @id @default(autoincrement())
 
- 
-  paymentCash      Float @default(0)
-  paymentCard      Float @default(0)
-  paymentTransfer  Float @default(0)
+  date            DateTime
+  tenantId        Int
 
-  createdAt     DateTime @default(now())
+  totalOrders     Int
+  totalSales      Float
+
+  paymentCash     Float    @default(0)
+  paymentCard     Float    @default(0)
+  paymentTransfer Float    @default(0)
+
+  createdAt       DateTime @default(now())
+
+  grossSales      Float    @default(0)
+  cancelledSales  Float    @default(0)
+  netSales        Float    @default(0)
+
+  @@unique([date, tenantId], name: "date_tenantId")
 }
+
 model InventoryItem {
   id           Int                 @id @default(autoincrement())
   name         String

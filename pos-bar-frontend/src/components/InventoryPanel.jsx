@@ -3,7 +3,6 @@ import { useEffect, useState, useMemo } from "react";
 
 const API_URL = String(import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 
-
 export default function InventoryPanel() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -11,14 +10,14 @@ export default function InventoryPanel() {
 
   const [editingName, setEditingName] = useState("");
 
-  // ✅ NUEVO: Alta rápida de producto de inventario
+  // ✅ Alta rápida de producto de inventario
   const [newItemForm, setNewItemForm] = useState({
     name: "",
     unit: "pz",
     sku: "",
   });
 
-  // ✅ NUEVO: edición de nombre (mínimo)
+  // ✅ edición de nombre (mínimo)
   const [editingItemId, setEditingItemId] = useState(null);
 
   const [movementForm, setMovementForm] = useState({
@@ -34,17 +33,38 @@ export default function InventoryPanel() {
   });
 
   // ==========================
+  // ✅ TENANT helpers (mínimo)
+  // ==========================
+  function getTenantKey() {
+    return (
+      localStorage.getItem("tenant_key") ||
+      localStorage.getItem("tenantKey") ||
+      "default"
+    );
+  }
+
+  async function fetchWithTenant(url, options = {}) {
+    const tenantKey = getTenantKey();
+
+    const headers = {
+      ...(options.headers || {}),
+      "x-tenant-key": tenantKey,
+    };
+
+    return fetch(url, { ...options, headers });
+  }
+
+  // ==========================
   // Helpers de stock / estados
   // ==========================
   function getStockNumber(item) {
-    // currentStock viene del endpoint debug de órdenes
     const raw = item.currentStock ?? item.stock ?? 0;
     return Number(raw) || 0;
   }
 
   function isLowStock(item) {
     const stock = getStockNumber(item);
-    return stock > 0 && stock <= 3; // alerta cuando está por terminarse
+    return stock > 0 && stock <= 3;
   }
 
   function isOutOfStock(item) {
@@ -68,9 +88,10 @@ export default function InventoryPanel() {
       setLoading(true);
       setError("");
 
-     const res = await fetch(
-  `${import.meta.env.VITE_API_URL}/api/orders/debug/inventory-items`
-);
+      const res = await fetchWithTenant(
+        `${API_URL}/api/orders/debug/inventory-items`
+      );
+
       if (!res.ok) {
         throw new Error("No se pudo cargar el inventario");
       }
@@ -86,7 +107,9 @@ export default function InventoryPanel() {
     }
   }
 
-  // ✅ NUEVO: guardar nombre en BD
+  // ==========================
+  // Guardar nombre en BD
+  // ==========================
   async function saveItemName(itemId) {
     try {
       if (!editingName || !editingName.trim()) {
@@ -97,14 +120,11 @@ export default function InventoryPanel() {
       setLoading(true);
       setError("");
 
-      const res = await fetch(
-  `${import.meta.env.VITE_API_URL}/api/inventory/${itemId}`,
-  {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: editingName.trim() }),
-  }
-);
+      const res = await fetchWithTenant(`${API_URL}/api/inventory/${itemId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: editingName.trim() }),
+      });
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -125,10 +145,9 @@ export default function InventoryPanel() {
   }
 
   useEffect(() => {
-    // Carga inicial al abrir la pestaña de inventario
     loadSummary();
 
-    // Función global para refrescar inventario desde el POS
+    // Refrescar inventario desde el POS
     window.refreshInventoryFromOrder = () => {
       loadSummary();
     };
@@ -155,14 +174,12 @@ export default function InventoryPanel() {
     try {
       setLoading(true);
       setError("");
-    const res = await fetch(
-  `${import.meta.env.VITE_API_URL}/api/inventory/movements`,
-  {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(movementForm),
-  }
-);
+
+      const res = await fetchWithTenant(`${API_URL}/api/inventory/movements`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(movementForm),
+      });
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -184,7 +201,9 @@ export default function InventoryPanel() {
     }
   }
 
-  // ✅ NUEVO: crear producto de inventario desde UI
+  // ==========================
+  // Crear producto de inventario
+  // ==========================
   async function handleCreateNewItem(e) {
     e.preventDefault();
 
@@ -198,18 +217,15 @@ export default function InventoryPanel() {
       setLoading(true);
       setError("");
 
-      const res = await fetch(
-  `${import.meta.env.VITE_API_URL}/api/inventory/items`,
-  {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      name,
-      unit: newItemForm.unit || "pz",
-      sku: newItemForm.sku ? String(newItemForm.sku).trim() : null,
-    }),
-  }
-);
+      const res = await fetchWithTenant(`${API_URL}/api/inventory/create`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          unit: newItemForm.unit || "pz",
+          sku: newItemForm.sku ? String(newItemForm.sku).trim() : null,
+        }),
+      });
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -257,9 +273,7 @@ export default function InventoryPanel() {
       alert("No hay datos para exportar.");
       return;
     }
-    const blob = new Blob([csv], {
-      type: "text/csv;charset=utf-8;",
-    });
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -269,7 +283,6 @@ export default function InventoryPanel() {
   }
 
   async function fetchAndExport(period) {
-    // period: "week" | "month" | "custom"
     let from = reportRange.from;
     let to = reportRange.to;
     const today = new Date();
@@ -307,9 +320,10 @@ export default function InventoryPanel() {
       if (from) params.append("from", from);
       if (to) params.append("to", to);
 
-      const res = await fetch(
-  `${import.meta.env.VITE_API_URL}/api/inventory/report?${params.toString()}`
-);
+      const res = await fetchWithTenant(
+        `${API_URL}/api/inventory/report?${params.toString()}`
+      );
+
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || "No se pudo obtener el reporte");
@@ -393,26 +407,13 @@ export default function InventoryPanel() {
 
         <div style={{ textAlign: "right" }}>
           {loading && (
-            <span
-              style={{
-                fontSize: 12,
-                color: "#A5B4FC",
-              }}
-            >
-              Cargando...
-            </span>
+            <span style={{ fontSize: 12, color: "#A5B4FC" }}>Cargando...</span>
           )}
         </div>
       </div>
 
       {error && (
-        <div
-          style={{
-            marginBottom: 12,
-            fontSize: 12,
-            color: "#FCA5A5",
-          }}
-        >
+        <div style={{ marginBottom: 12, fontSize: 12, color: "#FCA5A5" }}>
           {error}
         </div>
       )}
@@ -499,7 +500,7 @@ export default function InventoryPanel() {
         </div>
       </div>
 
-      {/* CUERPO PRINCIPAL: TABLA + FORM + EXPORT */}
+      {/* CUERPO PRINCIPAL */}
       <div
         style={{
           display: "grid",
@@ -507,7 +508,7 @@ export default function InventoryPanel() {
           gap: 16,
         }}
       >
-        {/* TABLA DE INVENTARIO */}
+        {/* TABLA */}
         <div
           style={{
             backgroundColor: "#020617",
@@ -518,7 +519,6 @@ export default function InventoryPanel() {
             overflow: "auto",
           }}
         >
-          {/* Encabezado de columnas */}
           <div
             style={{
               display: "grid",
@@ -534,7 +534,6 @@ export default function InventoryPanel() {
             <span style={{ textAlign: "right" }}>Estado</span>
           </div>
 
-          {/* Filas */}
           {items.length === 0 && (
             <div
               style={{
@@ -562,6 +561,7 @@ export default function InventoryPanel() {
               justifyContent: "flex-end",
             };
             let pillText = "OK";
+
             if (low) {
               pillStyle = {
                 ...pillStyle,
@@ -603,7 +603,6 @@ export default function InventoryPanel() {
                 }}
               >
                 <div>
-                  {/* ✅ SOLO AQUÍ se hizo editable el nombre, manteniendo diseño */}
                   <div
                     style={{
                       fontSize: 13,
@@ -695,12 +694,7 @@ export default function InventoryPanel() {
                   </div>
 
                   {item.unit && (
-                    <div
-                      style={{
-                        fontSize: 11,
-                        color: "#6B7280",
-                      }}
-                    >
+                    <div style={{ fontSize: 11, color: "#6B7280" }}>
                       Unidad: {item.unit}
                     </div>
                   )}
@@ -724,15 +718,9 @@ export default function InventoryPanel() {
           })}
         </div>
 
-        {/* DERECHA: NUEVO PRODUCTO + MOVIMIENTOS + EXPORT */}
-        <div
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: 12,
-          }}
-        >
-          {/* ✅ NUEVO: ALTA RÁPIDA (➕ Nuevo producto) */}
+        {/* DERECHA */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {/* NUEVO PRODUCTO */}
           <form
             onSubmit={handleCreateNewItem}
             style={{
@@ -829,7 +817,7 @@ export default function InventoryPanel() {
             </div>
           </form>
 
-          {/* FORM MOVIMIENTO */}
+          {/* MOVIMIENTO */}
           <form
             onSubmit={handleRegisterMovement}
             style={{
@@ -864,13 +852,7 @@ export default function InventoryPanel() {
               ))}
             </select>
 
-            <div
-              style={{
-                display: "flex",
-                gap: 6,
-                alignItems: "center",
-              }}
-            >
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <select
                 name="type"
                 value={movementForm.type}
@@ -913,8 +895,7 @@ export default function InventoryPanel() {
                 padding: "8px 12px",
                 fontSize: 12,
                 fontWeight: 600,
-                background:
-                  "linear-gradient(135deg, #22C55E, #16A34A, #22C55E)",
+                background: "linear-gradient(135deg, #22C55E, #16A34A, #22C55E)",
                 color: "#020617",
                 cursor: "pointer",
                 justifySelf: "flex-end",
@@ -943,7 +924,7 @@ export default function InventoryPanel() {
             />
           </form>
 
-          {/* EXPORT REPORTES */}
+          {/* EXPORT */}
           <div
             style={{
               backgroundColor: "#020617",
@@ -957,9 +938,8 @@ export default function InventoryPanel() {
               color: "#E5E7EB",
             }}
           >
-            <span style={{ fontWeight: 500 }}>
-              Exportar reportes de inventario
-            </span>
+            <span style={{ fontWeight: 500 }}>Exportar reportes de inventario</span>
+
             <div
               style={{
                 display: "flex",
@@ -985,6 +965,7 @@ export default function InventoryPanel() {
               >
                 Semana actual
               </button>
+
               <button
                 type="button"
                 onClick={() => fetchAndExport("month")}
@@ -1001,15 +982,14 @@ export default function InventoryPanel() {
               >
                 Mes actual
               </button>
+
               <span>o rango personalizado:</span>
+
               <input
                 type="date"
                 value={reportRange.from}
                 onChange={(e) =>
-                  setReportRange((prev) => ({
-                    ...prev,
-                    from: e.target.value,
-                  }))
+                  setReportRange((prev) => ({ ...prev, from: e.target.value }))
                 }
                 style={{
                   backgroundColor: "#020617",
@@ -1020,14 +1000,12 @@ export default function InventoryPanel() {
                   padding: "4px 6px",
                 }}
               />
+
               <input
                 type="date"
                 value={reportRange.to}
                 onChange={(e) =>
-                  setReportRange((prev) => ({
-                    ...prev,
-                    to: e.target.value,
-                  }))
+                  setReportRange((prev) => ({ ...prev, to: e.target.value }))
                 }
                 style={{
                   backgroundColor: "#020617",
@@ -1038,6 +1016,7 @@ export default function InventoryPanel() {
                   padding: "4px 6px",
                 }}
               />
+
               <button
                 type="button"
                 onClick={() => fetchAndExport("custom")}
@@ -1059,13 +1038,7 @@ export default function InventoryPanel() {
         </div>
       </div>
 
-      <p
-        style={{
-          marginTop: 10,
-          color: "#6B7280",
-          fontSize: 11,
-        }}
-      >
+      <p style={{ marginTop: 10, color: "#6B7280", fontSize: 11 }}>
         Tip: cuando veas varios productos en “Por terminarse”, es momento de
         levantar pedido antes del fin de semana fuerte.
       </p>

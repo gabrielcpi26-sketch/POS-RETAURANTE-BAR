@@ -1,0 +1,17 @@
+# ENV (credenciales)
+.env
+.env.*
+backend/.env
+backend/.env.*
+pos-bar-frontend/.env
+pos-bar-frontend/.env.*
+
+# deps
+node_modules/
+backend/node_modules/
+pos-bar-frontend/node_modules/
+
+# builds
+dist/
+backend/dist/
+pos-bar-frontend/dist/

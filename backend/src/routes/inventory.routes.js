@@ -5,223 +5,269 @@ const { PrismaClient } = require("@prisma/client");
 
 const prisma = new PrismaClient();
 
-const SEED_ITEMS = [
-  { name: "Cerveza nacional", sku: "CERV_NAC", unit: "pz" },
-  { name: "Cerveza importada", sku: "CERV_IMP", unit: "pz" },
-  { name: "Cubeta 6 cervezas", sku: "CUBETA_6", unit: "cubeta" },
-  { name: "Tequila shot", sku: "TEQ_SHOT", unit: "shot" },
-  { name: "Whisky trago", sku: "WHISKY_TR", unit: "trago" },
-  { name: "Vodka trago", sku: "VODKA_TR", unit: "trago" },
-  { name: "Refresco 355 ml", sku: "REF_355", unit: "pz" },
-  { name: "Agua natural", sku: "AGUA_NAT", unit: "pz" },
-  { name: "Botana mixta", sku: "BOT_MIX", unit: "orden" },
-];
+// ======================
+// ✅ TENANT (mínimo, seguro)
+// ======================
+async function getTenantId(req) {
+  // Si ya viene resuelto por middleware (server.js), úsalo
+  if (req.tenant && req.tenant.id) return req.tenant.id;
 
-// GET /api/inventory/summary
-router.get("/summary", async (req, res) => {
+  // Fallback (por header)
+  const tenantKey = String(
+    req.header("x-tenant") || req.header("x-tenant-key") || "default"
+  )
+    .trim()
+    .toLowerCase();
+
+  const tenant = await prisma.tenant.upsert({
+    where: { key: tenantKey },
+    update: {},
+    create: { key: tenantKey, name: tenantKey },
+  });
+
+  return tenant.id;
+}
+
+// Helper: para que tu UI siga mostrando "stock" aunque en DB sea currentStock
+function withStockAlias(item) {
+  if (!item) return item;
+  return { ...item, stock: item.currentStock };
+}
+
+// ======================
+// GET /api/inventory/low
+// ======================
+router.get("/low", async (req, res) => {
   try {
-    let items = await prisma.inventoryItem.findMany({
-      orderBy: { name: "asc" },
+    const tenantId = await getTenantId(req);
+
+    const low = await prisma.inventoryItem.findMany({
+      where: { tenantId, currentStock: { lte: 2 } },
+      orderBy: { currentStock: "asc" },
     });
 
-    // ❌ DESACTIVADO: seed automático de inventario
-// if (items.length === 0) {
-//   await prisma.inventoryItem.createMany({ data: SEED_ITEMS });
-//   items = await prisma.inventoryItem.findMany({
-//     orderBy: { name: "asc" },
-//   });
-// }
-
-    return res.json({ items });
+    return res.json(low.map(withStockAlias));
   } catch (error) {
-    console.error("Error al obtener inventario:", error);
-    return res.status(500).json({ error: "Error al obtener el inventario" });
+    console.error("Error al obtener inventario bajo:", error);
+    return res.status(500).json({ error: "Error al cargar inventario" });
   }
 });
 
-// POST /api/inventory/items
-// Crear un producto de inventario (alta rápida desde UI)
-router.post("/items", async (req, res) => {
+// ======================
+// GET /api/inventory/all
+// ======================
+router.get("/all", async (req, res) => {
   try {
-    const { name, unit, sku } = req.body;
+    const tenantId = await getTenantId(req);
 
-    if (!name || !String(name).trim()) {
-      return res.status(400).json({ error: "name es obligatorio" });
+    const items = await prisma.inventoryItem.findMany({
+      where: { tenantId },
+      orderBy: { name: "asc" },
+    });
+
+    return res.json(items.map(withStockAlias));
+  } catch (error) {
+    console.error("Error al obtener inventario:", error);
+    return res.status(500).json({ error: "Error al cargar inventario" });
+  }
+});
+
+// ======================
+// POST /api/inventory/create
+// ======================
+router.post("/create", async (req, res) => {
+  try {
+    const tenantId = await getTenantId(req);
+
+    const { name } = req.body;
+    if (!name || !name.trim()) {
+      return res.status(400).json({ error: "Nombre requerido" });
     }
 
-    const created = await prisma.inventoryItem.create({
+    const item = await prisma.inventoryItem.create({
       data: {
-        name: String(name).trim(),
-        unit: unit ? String(unit).trim() : "pz",
-        sku: sku ? String(sku).trim() : null,
+        name: name.trim(),
         currentStock: 0,
+        tenantId,
       },
     });
 
-    return res.status(201).json(created);
+    return res.json(withStockAlias(item));
   } catch (error) {
-    console.error("Error al crear producto de inventario:", error);
+    console.error("Error al crear producto:", error);
     return res.status(500).json({ error: "Error al crear producto" });
   }
 });
 
-
-
-// POST /api/inventory/movements
-router.post("/movements", async (req, res) => {
+// ======================
+// POST /api/inventory/movements  ✅ (plural)
+// POST /api/inventory/movement   ✅ (alias por compatibilidad)
+// ======================
+async function handleMovement(req, res) {
   try {
-    const { itemId, type, quantity, reason } = req.body;
+    const tenantId = await getTenantId(req);
 
-    if (!itemId || !type || !quantity) {
-      return res
-        .status(400)
-        .json({ error: "itemId, type y quantity son obligatorios" });
+    const { itemId, type, quantity, reason } = req.body;
+    if (itemId === undefined || !type || quantity === undefined) {
+      return res.status(400).json({ error: "Datos incompletos" });
+    }
+
+    const id = Number(itemId);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ error: "Producto inválido" });
     }
 
     const qty = Number(quantity);
     if (!Number.isFinite(qty) || qty <= 0) {
-      return res
-        .status(400)
-        .json({ error: "La cantidad debe ser un número positivo" });
+      return res.status(400).json({ error: "Cantidad inválida" });
     }
 
-    if (type !== "IN" && type !== "OUT") {
-      return res.status(400).json({ error: 'type debe ser "IN" o "OUT"' });
-    }
-
-    const item = await prisma.inventoryItem.findUnique({
-      where: { id: Number(itemId) },
+    // ✅ Asegura que el item pertenece al tenant
+    const item = await prisma.inventoryItem.findFirst({
+      where: { id, tenantId },
+      select: { id: true, currentStock: true, tenantId: true },
     });
 
     if (!item) {
       return res.status(404).json({ error: "Producto no encontrado" });
     }
 
-    let newStock =
-      type === "IN" ? item.currentStock + qty : item.currentStock - qty;
-    if (newStock < 0) newStock = 0;
+    // Normaliza type (tu UI usa Entrada/Salida o IN/OUT según cómo lo tengas)
+    const t = String(type).toUpperCase();
+    const isOut = t === "OUT" || t === "SALIDA";
+    const isIn = t === "IN" || t === "ENTRADA";
+    if (!isOut && !isIn) {
+      return res.status(400).json({ error: "Tipo inválido" });
+    }
 
-    const movementData = {
-      itemId: item.id,
-      type,
-      quantity: qty,
-      reason: reason || null,
-    };
+    const delta = isOut ? -qty : qty;
 
-    const [movement, updatedItem] = await prisma.$transaction([
-      prisma.inventoryMovement.create({ data: movementData }),
-      prisma.inventoryItem.update({
-        where: { id: item.id },
-        data: { currentStock: newStock },
-      }),
-    ]);
-
-    return res.json({
-      message: "Movimiento registrado correctamente",
-      movement,
-      item: updatedItem,
+    // 1) registra movimiento (asumiendo que tu modelo SÍ tiene tenantId)
+    const movement = await prisma.inventoryMovement.create({
+      data: {
+        itemId: id,
+        type: isOut ? "OUT" : "IN",
+        quantity: qty,
+        reason: reason || "",
+        tenantId,
+      },
     });
+
+    // 2) ajusta stock SOLO dentro del tenant
+    await prisma.inventoryItem.updateMany({
+      where: { id, tenantId },
+      data: { currentStock: { increment: delta } },
+    });
+
+    return res.json({ ok: true, movement });
   } catch (error) {
     console.error("Error al registrar movimiento:", error);
-    return res
-      .status(500)
-      .json({ error: "Error al registrar el movimiento" });
+    return res.status(500).json({ error: "Error al registrar movimiento" });
   }
-});
+}
 
-// GET /api/inventory/report
-router.get("/report", async (req, res) => {
+router.post("/movements", handleMovement);
+router.post("/movement", handleMovement);
+
+// ======================
+// POST /api/inventory/export
+// ======================
+router.post("/export", async (req, res) => {
   try {
-    const { from, to } = req.query;
+    const tenantId = await getTenantId(req);
 
-    const now = new Date();
-    let fromDate;
-    let toDate;
+    const { from, to } = req.body;
 
-    if (from && to) {
-      fromDate = new Date(from);
-      toDate = new Date(to);
-    } else {
-      toDate = now;
-      fromDate = new Date(now);
-      fromDate.setDate(now.getDate() - 30);
-    }
+    const fromDate = from ? new Date(from) : new Date(Date.now() - 7 * 86400000);
+    const toDate = to ? new Date(to) : new Date();
 
     const movements = await prisma.inventoryMovement.findMany({
       where: {
-        createdAt: {
-          gte: fromDate,
-          lte: toDate,
-        },
+        tenantId,
+        createdAt: { gte: fromDate, lte: toDate },
       },
-      include: { item: true },
-      orderBy: { createdAt: "asc" },
+      orderBy: { createdAt: "desc" },
     });
 
-    const map = new Map();
-
-    movements.forEach((m) => {
-      const key = m.itemId;
-      if (!map.has(key)) {
-        map.set(key, {
-          itemId: m.itemId,
-          itemName: m.item.name,
-          sku: m.item.sku,
-          unit: m.item.unit,
-          entries: 0,
-          outputs: 0,
-        });
-      }
-      const row = map.get(key);
-      if (m.type === "IN") row.entries += m.quantity;
-      if (m.type === "OUT") row.outputs += m.quantity;
+    const items = await prisma.inventoryItem.findMany({
+      where: { tenantId },
+      orderBy: { name: "asc" },
     });
 
-    const rows = [];
-    for (const row of map.values()) {
-      const item = await prisma.inventoryItem.findUnique({
-        where: { id: row.itemId },
-      });
-      rows.push({
-        ...row,
-        netQuantity: row.entries - row.outputs,
-        finalStock: item ? item.currentStock : 0,
-      });
-    }
-
-    return res.json({ from: fromDate, to: toDate, rows });
+    return res.json({ movements, items: items.map(withStockAlias) });
   } catch (error) {
-    console.error("Error al generar reporte de inventario:", error);
-    return res
-      .status(500)
-      .json({ error: "Error al generar el reporte de inventario" });
+    console.error("Error al exportar inventario:", error);
+    return res.status(500).json({ error: "Error al exportar inventario" });
   }
 });
 
-// PUT /api/inventory/:id
-// Permite editar el nombre de un producto de inventario
+// ======================
+// DELETE /api/inventory/:id
+// ======================
+router.delete("/:id", async (req, res) => {
+  try {
+    const tenantId = await getTenantId(req);
+
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ error: "ID inválido" });
+    }
+
+    const exists = await prisma.inventoryItem.findFirst({
+      where: { id, tenantId },
+      select: { id: true },
+    });
+    if (!exists) {
+      return res.status(404).json({ error: "Producto no encontrado" });
+    }
+
+    await prisma.inventoryMovement.deleteMany({
+      where: { itemId: id, tenantId },
+    });
+
+    await prisma.inventoryItem.deleteMany({
+      where: { id, tenantId },
+    });
+
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error("Error al eliminar producto:", error);
+    return res.status(500).json({ error: "Error al eliminar producto" });
+  }
+});
+
+// ======================
+// PUT /api/inventory/:id (editar nombre)
+// ======================
 router.put("/:id", async (req, res) => {
   try {
+    const tenantId = await getTenantId(req);
+
     const id = Number(req.params.id);
     const { name } = req.body;
 
-    if (!id || !name || !name.trim()) {
+    if (!Number.isInteger(id) || id <= 0 || !name || !name.trim()) {
       return res.status(400).json({ error: "Datos inválidos" });
     }
 
-    const updated = await prisma.inventoryItem.update({
-      where: { id },
+    const result = await prisma.inventoryItem.updateMany({
+      where: { id, tenantId },
       data: { name: name.trim() },
     });
 
-    return res.json(updated);
+    if (!result || result.count === 0) {
+      return res.status(404).json({ error: "Producto no encontrado" });
+    }
+
+    const updated = await prisma.inventoryItem.findFirst({
+      where: { id, tenantId },
+    });
+
+    return res.json(withStockAlias(updated));
   } catch (error) {
     console.error("Error al editar producto de inventario:", error);
-    return res
-      .status(500)
-      .json({ error: "Error al actualizar producto" });
+    return res.status(500).json({ error: "Error al actualizar producto" });
   }
 });
-
 
 module.exports = router;

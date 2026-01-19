@@ -4,9 +4,45 @@ const express = require("express");
 const router = express.Router();
 const { PrismaClient } = require("@prisma/client");
 
+
+
+
+
 const prisma = new PrismaClient();
 console.log("✅ [BOOT] orders.routes.js CARGADO -", __filename, "time:", new Date().toISOString());
 
+// =====================================
+// ✅ TENANT (mínimo, sin romper lógica)
+// =====================================
+async function resolveTenant(req) {
+  const tenantKey = String(
+    req.header("x-tenant") || req.header("x-tenant-key") || "default"
+  )
+    .trim()
+    .toLowerCase();
+
+  const tenant = await prisma.tenant.upsert({
+    where: { key: tenantKey },
+    update: {},
+    create: { key: tenantKey, name: tenantKey },
+    select: { id: true, key: true, name: true },
+  });
+
+  req.tenant = tenant;
+  req.tenantId = tenant.id;
+  return tenant;
+}
+
+// aplica tenant a TODO este router (mínimo, sin tocar endpoints)
+router.use(async (req, res, next) => {
+  try {
+    await resolveTenant(req);
+    next();
+  } catch (e) {
+    console.error("❌ Error resolviendo tenant:", e);
+    return res.status(500).json({ error: "No se pudo resolver tenant" });
+  }
+});
 
 // =====================================
 // PROMOS: nombre del POS → inventario real
@@ -25,7 +61,8 @@ const PROMO_MAPPINGS = {
 // (1:1 + PROMOS + RECETAS)
 // =============================
 // ✅ db = cliente prisma (normal o tx). Por default usa prisma global.
-async function applyInventoryFromOrderItems(items, db = prisma) {
+// ✅ tenantId opcional (si viene -> filtra 100% por tenant)
+async function applyInventoryFromOrderItems(items, db = prisma, tenantId = null) {
   if (!Array.isArray(items) || items.length === 0) return;
 
   const getQty = (raw) => {
@@ -53,71 +90,88 @@ async function applyInventoryFromOrderItems(items, db = prisma) {
       let qty = getQty(rawItem);
       if (!qty) continue;
 
-// =============================================
-// ✅ 0) SI VIENE menuRecipeId -> DESCUENTA RECETA (BOM)
-// =============================================
-const recipeIdRaw = rawItem.menuRecipeId ?? rawItem.menu_recipe_id ?? null;
-const recipeId = recipeIdRaw ? Number(recipeIdRaw) : null;
+      // =============================================
+      // ✅ 0) SI VIENE  -> DESCUENTA RECETA (BOM)
+      // =============================================
+      const recipeIdRaw =
+  rawItem.menuRecipeId ??
+  rawItem.menuRecipeID ??
+  rawItem.menu_recipe_id ??
+  rawItem.menu_recipe_ID ??
+  null;
 
-if (recipeId && Number.isFinite(recipeId)) {
-  const recipe = await prisma.menuRecipe.findUnique({
-    where: { id: recipeId },
-    select: { id: true, name: true, items: true }, // items = JSON (ver nota abajo)
-  });
+      const recipeId = recipeIdRaw ? Number(recipeIdRaw) : null;
 
-  if (!recipe) {
-    throw new Error(`Receta ${recipeId} no existe`);
-  }
+      if (recipeId && Number.isFinite(recipeId)) {
+        // ✅ TENANT: receta aislada
+        const recipe = await db.menuRecipe.findFirst({
+  where: tenantId ? { id: recipeId, tenantId } : { id: recipeId },
+  select: {
+    id: true,
+    items: true, // ✅ items = JSON (ingredientes)
+  },
+});
 
-  let recipeItems = [];
-  try {
-    recipeItems = recipe.items ? JSON.parse(recipe.items) : [];
-  } catch {
-    recipeItems = [];
-  }
 
-  if (!Array.isArray(recipeItems) || recipeItems.length === 0) {
-    throw new Error(`Receta ${recipeId} no tiene items`);
-  }
+        if (!recipe) {
+          throw new Error(`Receta ${recipeId} no existe`);
+        }
 
-  // descuenta cada ingrediente
-  for (const ing of recipeItems) {
-    const ingId = Number(ing.inventoryItemId ?? ing.itemId ?? 0);
-    const ingQty = Number(ing.qty ?? ing.quantity ?? 0);
+        let recipeItems = [];
+        try {
+          recipeItems = recipe.items ? JSON.parse(recipe.items) : [];
+        } catch {
+          recipeItems = [];
+        }
 
-    if (!Number.isFinite(ingId) || ingId <= 0) continue;
-    if (!Number.isFinite(ingQty) || ingQty <= 0) continue;
+        if (!Array.isArray(recipeItems) || recipeItems.length === 0) {
+          throw new Error(`Receta ${recipeId} no tiene items`);
+        }
 
-    const totalIngQty = ingQty * qty;
+        // descuenta cada ingrediente
+        for (const ing of recipeItems) {
+          const ingId = Number(ing.inventoryItemId ?? ing.itemId ?? 0);
+          const ingQty = Number(ing.qty ?? ing.quantity ?? 0);
 
-    const invItem = await prisma.inventoryItem.findUnique({ where: { id: ingId } });
-    if (!invItem) {
-      throw new Error(`Ingrediente inventoryItemId ${ingId} no existe (receta ${recipeId})`);
-    }
+          if (!Number.isFinite(ingId) || ingId <= 0) continue;
+          if (!Number.isFinite(ingQty) || ingQty <= 0) continue;
 
-    const stockAntes = Number(invItem.currentStock || 0);
-    const newStock = stockAntes - totalIngQty < 0 ? 0 : stockAntes - totalIngQty;
+          const totalIngQty = ingQty * qty;
 
-    await prisma.$transaction([
-      prisma.inventoryMovement.create({
-        data: {
-          type: "OUT",
-          quantity: totalIngQty,
-          reason: `Venta receta #${recipeId} "${displayName || baseName || recipe.name}" -> ${invItem.name} x${totalIngQty}`,
-          itemId: invItem.id,
-        },
-      }),
-      prisma.inventoryItem.update({
-        where: { id: invItem.id },
-        data: { currentStock: newStock },
-      }),
-    ]);
-  }
+          // ✅ TENANT: ingrediente aislado
+          const invItem = await db.inventoryItem.findFirst({
+            where: tenantId ? { id: ingId, tenantId } : { id: ingId },
+          });
 
-  // ✅ IMPORTANTE: ya procesamos este item por receta, no seguir a inventoryItemId/nombre
-  continue;
-}
+          if (!invItem) {
+            throw new Error(
+              `Ingrediente inventoryItemId ${ingId} no existe (receta ${recipeId})`
+            );
+          }
 
+          const stockAntes = Number(invItem.currentStock || 0);
+          const newStock = stockAntes - totalIngQty < 0 ? 0 : stockAntes - totalIngQty;
+
+          // ✅ TENANT: movement aislado
+          await db.inventoryMovement.create({
+            data: {
+              type: "OUT",
+              quantity: totalIngQty,
+              reason: `Venta receta #${recipeId} "${displayName || baseName || recipe.name}" -> ${invItem.name} x${totalIngQty}`,
+              itemId: invItem.id,
+              ...(tenantId ? { tenantId } : {}),
+            },
+          });
+
+          await db.inventoryItem.update({
+            where: { id: invItem.id },
+            data: { currentStock: newStock },
+          });
+        }
+
+        // ✅ IMPORTANTE: ya procesamos este item por receta, no seguir a inventoryItemId/nombre
+        continue;
+      }
 
       // ✅ PROMOS (por nombre base)
       const promo = baseName ? PROMO_MAPPINGS[baseName] : null;
@@ -137,13 +191,15 @@ if (recipeId && Number.isFinite(recipeId)) {
       const invId = invIdRaw ? Number(invIdRaw) : null;
 
       if (invId && Number.isFinite(invId)) {
-        const invItem = await db.inventoryItem.findUnique({
-          where: { id: invId },
+        // ✅ TENANT: item aislado
+        const invItem = await db.inventoryItem.findFirst({
+          where: tenantId ? { id: invId, tenantId } : { id: invId },
         });
-        if (!invItem) {
-  throw new Error(`Rollback: inventoryItemId ${invId} no existe (orden #${orderId ?? "?"})`);
-}
 
+        if (!invItem) {
+          // no rompas venta por inventario, mantén tu comportamiento
+          throw new Error(`inventoryItemId ${invId} no existe para este tenant`);
+        }
 
         const stockAntes = invItem.currentStock;
         const newStock = invItem.currentStock - qty < 0 ? 0 : invItem.currentStock - qty;
@@ -155,6 +211,7 @@ if (recipeId && Number.isFinite(recipeId)) {
             quantity: qty,
             reason: `Venta automática (ID) "${displayName || baseName || "Producto"}" x${qty}`,
             itemId: invItem.id,
+            ...(tenantId ? { tenantId } : {}),
           },
         });
 
@@ -184,8 +241,12 @@ if (recipeId && Number.isFinite(recipeId)) {
       name = typeof name === "string" ? name.trim() : name;
       if (!name) continue;
 
+      // ✅ TENANT: por nombre aislado
       const invItem = await db.inventoryItem.findFirst({
-        where: { name: { equals: name, mode: "insensitive" } },
+        where: {
+          name: { equals: name, mode: "insensitive" },
+          ...(tenantId ? { tenantId } : {}),
+        },
       });
 
       if (!invItem) continue;
@@ -199,6 +260,7 @@ if (recipeId && Number.isFinite(recipeId)) {
           quantity: qty,
           reason: `Venta automática (nombre) "${displayName || name}" → "${name}" x${qty}`,
           itemId: invItem.id,
+          ...(tenantId ? { tenantId } : {}),
         },
       });
 
@@ -227,7 +289,8 @@ if (recipeId && Number.isFinite(recipeId)) {
 // HELPER INVERSO: Revertir inventario por items (DEVOLUCIÓN)
 // (ID + PROMOS + NOMBRE) -> IN
 // =============================
-async function revertInventoryFromOrderItems(items, db = prisma, orderId = null) {
+// ✅ tenantId opcional (si viene -> filtra 100% por tenant)
+async function revertInventoryFromOrderItems(items, db = prisma, orderId = null, tenantId = null) {
   if (!Array.isArray(items) || items.length === 0) return;
 
   const getQty = (raw) => {
@@ -255,68 +318,81 @@ async function revertInventoryFromOrderItems(items, db = prisma, orderId = null)
       let qty = getQty(rawItem);
       if (!qty) continue;
 
-// =============================================
-// ✅ 0) SI VIENE menuRecipeId -> DEVOLVER RECETA (BOM)
-// =============================================
-const recipeIdRaw = rawItem.menuRecipeId ?? rawItem.menu_recipe_id ?? null;
-const recipeId = recipeIdRaw ? Number(recipeIdRaw) : null;
+      // =============================================
+      // ✅ 0) SI VIENE menuRecipeId -> DEVOLVER RECETA (BOM)
+      // =============================================
+      const recipeIdRaw =
+  rawItem.menuRecipeId ??
+  rawItem.menuRecipeID ??
+  rawItem.menu_recipe_id ??
+  rawItem.menu_recipe_ID ??
+  null;
 
-if (recipeId && Number.isFinite(recipeId)) {
-  const recipe = await db.menuRecipe.findUnique({
-    where: { id: recipeId },
-    select: { id: true, name: true, items: true },
-  });
+      const recipeId = recipeIdRaw ? Number(recipeIdRaw) : null;
 
-  if (!recipe) {
-    throw new Error(`Rollback: receta ${recipeId} no existe (orden #${orderId ?? "?"})`);
-  }
+      if (recipeId && Number.isFinite(recipeId)) {
+       const recipe = await db.menuRecipe.findFirst({
+  where: tenantId ? { id: recipeId, tenantId } : { id: recipeId },
+  select: {
+    id: true,
+    items: true, // ✅ items = JSON (ingredientes)
+  },
+});
 
-  let recipeItems = [];
-  try {
-    recipeItems = recipe.items ? JSON.parse(recipe.items) : [];
-  } catch {
-    recipeItems = [];
-  }
 
-  if (!Array.isArray(recipeItems) || recipeItems.length === 0) {
-    throw new Error(`Rollback: receta ${recipeId} sin items (orden #${orderId ?? "?"})`);
-  }
+        if (!recipe) {
+          throw new Error(`Rollback: receta ${recipeId} no existe (orden #${orderId ?? "?"})`);
+        }
 
-  for (const ing of recipeItems) {
-    const ingId = Number(ing.inventoryItemId ?? ing.itemId ?? 0);
-    const ingQty = Number(ing.qty ?? ing.quantity ?? 0);
+        let recipeItems = [];
+        try {
+          recipeItems = recipe.items ? JSON.parse(recipe.items) : [];
+        } catch {
+          recipeItems = [];
+        }
 
-    if (!Number.isFinite(ingId) || ingId <= 0) continue;
-    if (!Number.isFinite(ingQty) || ingQty <= 0) continue;
+        if (!Array.isArray(recipeItems) || recipeItems.length === 0) {
+          throw new Error(`Rollback: receta ${recipeId} sin items (orden #${orderId ?? "?"})`);
+        }
 
-    const totalIngQty = ingQty * qty;
+        for (const ing of recipeItems) {
+          const ingId = Number(ing.inventoryItemId ?? ing.itemId ?? 0);
+          const ingQty = Number(ing.qty ?? ing.quantity ?? 0);
 
-    const invItem = await db.inventoryItem.findUnique({ where: { id: ingId } });
-    if (!invItem) {
-      throw new Error(`Rollback: ingrediente ${ingId} no existe (receta ${recipeId})`);
-    }
+          if (!Number.isFinite(ingId) || ingId <= 0) continue;
+          if (!Number.isFinite(ingQty) || ingQty <= 0) continue;
 
-    const stockAntes = Number(invItem.currentStock || 0);
-    const newStock = stockAntes + totalIngQty;
+          const totalIngQty = ingQty * qty;
 
-    await db.inventoryMovement.create({
-      data: {
-        type: "IN",
-        quantity: totalIngQty,
-        reason: `Devolución orden #${orderId ?? "?"} receta #${recipeId} "${displayName || baseName || recipe.name}" -> ${invItem.name} +${totalIngQty}`,
-        itemId: invItem.id,
-      },
-    });
+          const invItem = await db.inventoryItem.findFirst({
+            where: tenantId ? { id: ingId, tenantId } : { id: ingId },
+          });
 
-    await db.inventoryItem.update({
-      where: { id: invItem.id },
-      data: { currentStock: newStock },
-    });
-  }
+          if (!invItem) {
+            throw new Error(`Rollback: ingrediente ${ingId} no existe (receta ${recipeId})`);
+          }
 
-  continue; // ✅ ya se procesó por receta
-}
+          const stockAntes = Number(invItem.currentStock || 0);
+          const newStock = stockAntes + totalIngQty;
 
+          await db.inventoryMovement.create({
+            data: {
+              type: "IN",
+              quantity: totalIngQty,
+              reason: `Devolución orden #${orderId ?? "?"} receta #${recipeId} "${displayName || baseName || recipe.name}" -> ${invItem.name} +${totalIngQty}`,
+              itemId: invItem.id,
+              ...(tenantId ? { tenantId } : {}),
+            },
+          });
+
+          await db.inventoryItem.update({
+            where: { id: invItem.id },
+            data: { currentStock: newStock },
+          });
+        }
+
+        continue; // ✅ ya se procesó por receta
+      }
 
       // ✅ PROMOS (por nombre base)
       const promo = baseName ? PROMO_MAPPINGS[baseName] : null;
@@ -334,11 +410,14 @@ if (recipeId && Number.isFinite(recipeId)) {
       const invId = invIdRaw ? Number(invIdRaw) : null;
 
       if (invId && Number.isFinite(invId)) {
-        const invItem = await db.inventoryItem.findUnique({ where: { id: invId } });
+        const invItem = await db.inventoryItem.findFirst({
+          where: tenantId ? { id: invId, tenantId } : { id: invId },
+        });
+
         if (!invItem) continue;
 
         const stockAntes = Number(invItem.currentStock ?? 0);
-const newStock = stockAntes + Number(qty || 0);
+        const newStock = stockAntes + Number(qty || 0);
 
         await db.inventoryMovement.create({
           data: {
@@ -346,6 +425,7 @@ const newStock = stockAntes + Number(qty || 0);
             quantity: qty,
             reason: `Devolución orden #${orderId ?? "?"} (ID) "${displayName || baseName || "Producto"}" +${qty}`,
             itemId: invItem.id,
+            ...(tenantId ? { tenantId } : {}),
           },
         });
 
@@ -377,7 +457,10 @@ const newStock = stockAntes + Number(qty || 0);
       if (!name) continue;
 
       const invItem = await db.inventoryItem.findFirst({
-        where: { name: { equals: name, mode: "insensitive" } },
+        where: {
+          name: { equals: name, mode: "insensitive" },
+          ...(tenantId ? { tenantId } : {}),
+        },
       });
       if (!invItem) continue;
 
@@ -390,6 +473,7 @@ const newStock = stockAntes + Number(qty || 0);
           quantity: qty,
           reason: `Devolución orden #${orderId ?? "?"} (nombre) "${displayName || name}" → "${name}" +${qty}`,
           itemId: invItem.id,
+          ...(tenantId ? { tenantId } : {}),
         },
       });
 
@@ -409,22 +493,18 @@ const newStock = stockAntes + Number(qty || 0);
         stockDespues: newStock,
       });
     } catch (err) {
-  console.error("[INVENTARIO][ROLLBACK] Error revertiendo inventario:", rawItem, err);
-  throw err; // ✅ IMPORTANTÍSIMO: si falla rollback, falla cancelación
-}
+      console.error("[INVENTARIO][ROLLBACK] Error revertiendo inventario:", rawItem, err);
+      throw err; // ✅ IMPORTANTÍSIMO: si falla rollback, falla cancelación
+    }
   }
 }
-
-
-
-/* Crear un nuevo pedido */
-/* POST /api/orders */
 
 /* Crear/actualizar pedido (MISMA FILA por mesa) */
 /* POST /api/orders */
 router.post("/", async (req, res) => {
   try {
     const body = req.body || {};
+    const tenantId = req.tenantId;
 
     const tableId = Number(body.tableId);
     const items = body.items;
@@ -444,7 +524,7 @@ router.post("/", async (req, res) => {
 
     // ✅ 1) Buscar pedido abierto existente para esa mesa (MISMA FILA)
     const existingOpen = await prisma.order.findFirst({
-      where: { tableId, isPaid: false },
+      where: { tableId, isPaid: false, tenantId },
       orderBy: { createdAt: "desc" }, // por si hubiera más de uno, toma el más reciente
       select: { id: true },
     });
@@ -465,6 +545,7 @@ router.post("/", async (req, res) => {
         })
       : await prisma.order.create({
           data: {
+            tenantId,
             tableId,
             total,
             items: JSON.stringify(items),
@@ -483,14 +564,16 @@ router.post("/", async (req, res) => {
   }
 });
 
-
 /**
  * Obtener listado de pedidos
  * GET /api/orders
  */
 router.get("/", async (req, res) => {
   try {
+    const tenantId = req.tenantId;
+
     const orders = await prisma.order.findMany({
+      where: { tenantId },
       orderBy: { createdAt: "desc" },
       include: {
         table: true,
@@ -524,6 +607,8 @@ router.get("/", async (req, res) => {
  */
 router.get("/admin/summary", async (req, res) => {
   try {
+    const tenantId = req.tenantId;
+
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -531,27 +616,27 @@ router.get("/admin/summary", async (req, res) => {
     tomorrow.setDate(today.getDate() + 1);
 
     const orders = await prisma.order.findMany({
-  where: {
-    createdAt: {
-      gte: today,
-      lt: tomorrow,
-    },
-    isPaid: true, // ✅ SOLO pagadas
-  },
-  include: {
-    table: true,
-  },
-  orderBy: {
-    createdAt: "desc",
-  },
-});
+      where: {
+        tenantId,
+        createdAt: {
+          gte: today,
+          lt: tomorrow,
+        },
+        isPaid: true, // ✅ SOLO pagadas
+      },
+      include: {
+        table: true,
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
 
-  const isCancelled = (o) => Boolean(o?.isCancelled) || Boolean(o?.cancelledAt);
-const ordersValid = orders.filter((o) => !isCancelled(o));
+    const isCancelled = (o) => Boolean(o?.isCancelled) || Boolean(o?.cancelledAt);
+    const ordersValid = orders.filter((o) => !isCancelled(o));
 
-const totalOrders = ordersValid.length;
-const totalSales = ordersValid.reduce((sum, order) => sum + (order.total || 0), 0);
-
+    const totalOrders = ordersValid.length;
+    const totalSales = ordersValid.reduce((sum, order) => sum + (order.total || 0), 0);
 
     const salesByTableMap = {};
     const productCountMap = {};
@@ -603,17 +688,15 @@ const totalSales = ordersValid.reduce((sum, order) => sum + (order.total || 0), 
           it.nombre ||
           "Producto";
 
-        const qty =
-          Number(it.qty ?? it.quantity ?? it.cantidad ?? it.units ?? 1) || 1;
+        const qty = Number(it.qty ?? it.quantity ?? it.cantidad ?? it.units ?? 1) || 1;
+        const price = Number(it.price ?? it.unitPrice ?? it.precio ?? 0) || 0;
 
-       const price = Number(it.price ?? it.unitPrice ?? it.precio ?? 0) || 0;
+        if (!productCountMap[name]) {
+          productCountMap[name] = { name, units: 0, sales: 0 };
+        }
 
-if (!productCountMap[name]) {
-  productCountMap[name] = { name, units: 0, sales: 0 };
-}
-
-productCountMap[name].units += qty;
-productCountMap[name].sales += price * qty;
+        productCountMap[name].units += qty;
+        productCountMap[name].sales += price * qty;
       }
     }
 
@@ -633,11 +716,25 @@ productCountMap[name].sales += price * qty;
   }
 });
 
-
 // DEBUG inventario
+
 router.get("/debug/inventory-items", async (req, res) => {
   try {
+    // 🔥 BACKWARD COMPATIBLE
+    // Si NO hay tenant, devolvemos TODO como antes
+    const tenantId =
+      req.tenantId ??
+      req.headers["x-tenant-id"] ??
+      req.query.tenantId ??
+      null;
+
+    const whereClause =
+      tenantId && Number(tenantId) > 0
+        ? { tenantId: Number(tenantId) }
+        : {}; // 👈 CLAVE: sin tenant = no filtro
+
     const items = await prisma.inventoryItem.findMany({
+      where: whereClause,
       select: {
         id: true,
         name: true,
@@ -646,17 +743,27 @@ router.get("/debug/inventory-items", async (req, res) => {
       orderBy: { name: "asc" },
     });
 
-    return res.json(items);
+    const normalized = items.map((i) => ({
+      ...i,
+      stock: i.currentStock,
+    }));
+
+    return res.json(normalized);
   } catch (err) {
-    console.error("[DEBUG INVENTARIO] Error:", err);
-    return res.status(500).json({ error: "Error obteniendo inventario debug" });
+    console.error("[DEBUG INVENTORY ITEMS]", err);
+    return res.status(500).json({ error: "Inventory debug error" });
   }
 });
+
+
 
 // HISTÓRICO ventas
 router.get("/history", async (req, res) => {
   try {
+    const tenantId = req.tenantId;
+
     const orders = await prisma.order.findMany({
+      where: { tenantId },
       orderBy: { createdAt: "asc" },
     });
 
@@ -679,11 +786,11 @@ router.get("/history", async (req, res) => {
   }
 });
 
-
-
 // ✅ RESUMEN SOLO DEL DÍA ACTUAL (PRISMA) — PRO: neto + canceladas
 router.get("/admin/summary-today", async (req, res) => {
   try {
+    const tenantId = req.tenantId;
+
     const start = new Date();
     start.setHours(0, 0, 0, 0);
 
@@ -691,15 +798,15 @@ router.get("/admin/summary-today", async (req, res) => {
     end.setDate(start.getDate() + 1); // mañana 00:00
 
     // Trae pedidos del día
- const orders = await prisma.order.findMany({
-  where: {
-    createdAt: { gte: start, lt: end },
-    isPaid: true, // ✅ SOLO pagadas para corte/resumen
-  },
-  include: { table: true },
-  orderBy: { createdAt: "desc" },
-});
-
+    const orders = await prisma.order.findMany({
+      where: {
+        tenantId,
+        createdAt: { gte: start, lt: end },
+        isPaid: true, // ✅ SOLO pagadas para corte/resumen
+      },
+      include: { table: true },
+      orderBy: { createdAt: "desc" },
+    });
 
     // 🔥 PRO: separar canceladas vs válidas
     const isCancelled = (o) => Boolean(o?.isCancelled) || Boolean(o?.cancelledAt);
@@ -708,10 +815,7 @@ router.get("/admin/summary-today", async (req, res) => {
     const validOrders = orders.filter((o) => !isCancelled(o));
 
     const grossSales = orders.reduce((sum, o) => sum + Number(o.total || 0), 0);
-    const cancelledSales = cancelledOrders.reduce(
-      (sum, o) => sum + Number(o.total || 0),
-      0
-    );
+    const cancelledSales = cancelledOrders.reduce((sum, o) => sum + Number(o.total || 0), 0);
 
     const netSales = Math.max(0, grossSales - cancelledSales);
 
@@ -751,16 +855,13 @@ router.get("/admin/summary-today", async (req, res) => {
           it.label ||
           it.nombre ||
           "Producto";
-        const qty =
-          Number(it.qty ?? it.quantity ?? it.cantidad ?? it.units ?? 1) || 1;
+        const qty = Number(it.qty ?? it.quantity ?? it.cantidad ?? it.units ?? 1) || 1;
         productCountMap[name] = productCountMap[name] || { name, qty: 0 };
         productCountMap[name].qty += qty;
       }
     }
 
-    const topProducts = Object.values(productCountMap).sort(
-      (a, b) => b.qty - a.qty
-    );
+    const topProducts = Object.values(productCountMap).sort((a, b) => b.qty - a.qty);
 
     // ✅ Compatibilidad: mantenemos totalSales/totalOrders como NETO (lo que cuadra con corte)
     res.json({
@@ -788,6 +889,8 @@ router.get("/admin/summary-today", async (req, res) => {
 // ===============================
 router.post("/close-day", async (req, res) => {
   try {
+    const tenantId = req.tenantId;
+
     const start = new Date();
     start.setHours(0, 0, 0, 0);
 
@@ -796,41 +899,48 @@ router.post("/close-day", async (req, res) => {
 
     // 1️⃣ Traer pedidos del día
     const orders = await prisma.order.findMany({
-  where: {
-    createdAt: { gte: start, lte: end },
-    isPaid: true,
-  },
-});
+      where: {
+        tenantId,
+        createdAt: { gte: start, lte: end },
+        isPaid: true,
+      },
+    });
 
+    const isCancelled = (o) => Boolean(o?.isCancelled) || Boolean(o?.cancelledAt);
 
- const isCancelled = (o) => Boolean(o?.isCancelled) || Boolean(o?.cancelledAt);
+    const grossSales = orders.reduce((sum, o) => sum + Number(o.total || 0), 0);
+    const cancelledSales = orders
+      .filter(isCancelled)
+      .reduce((sum, o) => sum + Number(o.total || 0), 0);
 
-const grossSales = orders.reduce((sum, o) => sum + Number(o.total || 0), 0);
-const cancelledSales = orders.filter(isCancelled).reduce((sum, o) => sum + Number(o.total || 0), 0);
+    const totalOrders = orders.filter((o) => !isCancelled(o)).length;
+    const totalSales = Math.max(0, grossSales - cancelledSales);
 
-const totalOrders = orders.filter((o) => !isCancelled(o)).length;
-const totalSales = Math.max(0, grossSales - cancelledSales);
-
-    // 2️⃣ Guardar / actualizar DailyReport
-const report = await prisma.dailyReport.upsert({
-  where: { date: start },
-  update: {
-    totalOrders,
-    totalSales,      // (sigue siendo netas como hoy)
-    grossSales,
-    cancelledSales,
-    netSales: totalSales, // netas oficiales del día
-  },
-  create: {
-    date: start,
-    totalOrders,
-    totalSales,      // netas
-    grossSales,
-    cancelledSales,
-    netSales: totalSales,
-  },
-});
-
+    // 2️⃣ Guardar / actualizar DailyReport (AISLADO por tenant)
+    const report = await prisma.dailyReport.upsert({
+      where: {
+        tenantId_date: {
+          tenantId,
+          date: start,
+        },
+      },
+      update: {
+        totalOrders,
+        totalSales, // netas como hoy
+        grossSales,
+        cancelledSales,
+        netSales: totalSales, // netas oficiales del día
+      },
+      create: {
+        tenantId,
+        date: start,
+        totalOrders,
+        totalSales, // netas
+        grossSales,
+        cancelledSales,
+        netSales: totalSales,
+      },
+    });
 
     res.json({
       ok: true,
@@ -847,6 +957,8 @@ const report = await prisma.dailyReport.upsert({
 // ✅ AQUI se descuenta inventario REAL (Regla #2)
 router.put("/close-table/:tableId", async (req, res) => {
   try {
+    const tenantId = req.tenantId;
+
     const tableId = Number(req.params.tableId);
     const { paymentMethod, paymentRef } = req.body;
 
@@ -862,7 +974,7 @@ router.put("/close-table/:tableId", async (req, res) => {
     const result = await prisma.$transaction(async (tx) => {
       // 1) Traer órdenes abiertas (incluye items)
       const openOrders = await tx.order.findMany({
-        where: { tableId, isPaid: false },
+        where: { tenantId, tableId, isPaid: false },
         select: { id: true, total: true, items: true },
         orderBy: { id: "asc" },
       });
@@ -884,7 +996,7 @@ router.put("/close-table/:tableId", async (req, res) => {
 
       // 3) Marcar como pagadas (idempotencia por updateMany)
       const upd = await tx.order.updateMany({
-        where: { tableId, isPaid: false },
+        where: { tenantId, tableId, isPaid: false },
         data: {
           isPaid: true,
           paidAt,
@@ -900,7 +1012,7 @@ router.put("/close-table/:tableId", async (req, res) => {
 
       // 4) ✅ DESCONTAR INVENTARIO REAL (solo aquí)
       if (allItems.length > 0) {
-        await applyInventoryFromOrderItems(allItems, tx);
+        await applyInventoryFromOrderItems(allItems, tx, tenantId);
         console.log("📦 Inventario descontado al cerrar cuenta (OK)");
       }
 
@@ -923,16 +1035,18 @@ router.put("/close-table/:tableId", async (req, res) => {
   }
 });
 
-
 // =======================
 // PEDIDOS ABIERTOS POR MESA
 // =======================
 router.get("/open/table/:tableId", async (req, res) => {
   try {
+    const tenantId = req.tenantId;
+
     const tableId = Number(req.params.tableId);
 
     const orders = await prisma.order.findMany({
       where: {
+        tenantId,
         tableId,
         isPaid: false,
       },
@@ -960,6 +1074,8 @@ router.get("/open/table/:tableId", async (req, res) => {
 // ======================================
 router.put("/cancel/:orderId", async (req, res) => {
   try {
+    const tenantId = req.tenantId;
+
     const orderId = Number(req.params.orderId);
     if (!Number.isFinite(orderId)) {
       return res.status(400).json({ error: "orderId inválido" });
@@ -969,9 +1085,9 @@ router.put("/cancel/:orderId", async (req, res) => {
     let cancelledTotal = 0;
 
     await prisma.$transaction(async (tx) => {
-      // 1️⃣ Traer la orden
-      const order = await tx.order.findUnique({
-        where: { id: orderId },
+      // 1️⃣ Traer la orden (AISLADA POR TENANT)
+      const order = await tx.order.findFirst({
+        where: { id: orderId, tenantId },
         select: {
           id: true,
           isPaid: true,
@@ -994,9 +1110,10 @@ router.put("/cancel/:orderId", async (req, res) => {
         throw new Error("La orden ya fue cancelada anteriormente");
       }
 
-      // 3️⃣ Idempotencia extra: ¿ya existe movimiento IN de devolución?
+      // 3️⃣ Idempotencia extra: ¿ya existe movimiento IN de devolución? (AISLADO POR TENANT)
       const alreadyCanceled = await tx.inventoryMovement.findFirst({
         where: {
+          ...(tenantId ? { tenantId } : {}),
           type: "IN",
           reason: { contains: `Devolución orden #${orderId}` },
         },
@@ -1016,7 +1133,7 @@ router.put("/cancel/:orderId", async (req, res) => {
       if (!items.length) throw new Error("La orden no tiene items para revertir");
 
       // 5️⃣ ✅ Rollback inventario (SI FALLA → debe fallar la cancelación)
-      await revertInventoryFromOrderItems(items, tx, orderId);
+      await revertInventoryFromOrderItems(items, tx, orderId, tenantId);
 
       // 6️⃣ Marcar cancelación permanente (misma transacción)
       await tx.order.update({
@@ -1038,6 +1155,5 @@ router.put("/cancel/:orderId", async (req, res) => {
     });
   }
 });
-
 
 module.exports = router;

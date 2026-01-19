@@ -11,7 +11,10 @@ const router = express.Router();
  */
 router.get("/", async (req, res) => {
   try {
+    const tenantId = req.tenantId; // ✅ TENANT
+
     const areas = await prisma.area.findMany({
+      where: { tenantId }, // ✅ TENANT
       include: {
         tables: true,
       },
@@ -31,21 +34,19 @@ router.get("/", async (req, res) => {
  */
 router.post("/", async (req, res) => {
   try {
+    const tenantId = req.tenantId; // ✅ TENANT
     const { name, description } = req.body;
 
     if (!name) {
-      return res
-        .status(400)
-        .json({ error: "El campo 'name' es obligatorio" });
+      return res.status(400).json({ error: "El campo 'name' es obligatorio" });
     }
 
+    // ✅ Crear área CON tenantId (misma lógica, sin inventar nada)
     const area = await prisma.area.create({
       data: {
-        name,
-        description: description || null,
-      },
-      include: {
-        tables: true,
+        name: name.trim(),
+        description: description?.trim() || "",
+        tenantId, // ✅ TENANT
       },
     });
 
@@ -62,6 +63,7 @@ router.post("/", async (req, res) => {
  */
 router.put("/:id", async (req, res) => {
   try {
+    const tenantId = req.tenantId; // ✅ TENANT
     const id = Number(req.params.id);
     const { name, description } = req.body;
 
@@ -81,20 +83,23 @@ router.put("/:id", async (req, res) => {
       dataToUpdate.description = description;
     }
 
-    const updated = await prisma.area.update({
-      where: { id },
+    const updated = await prisma.area.updateMany({
+      where: { id, tenantId }, // ✅ TENANT
       data: dataToUpdate,
-      include: { tables: true },
     });
 
-    res.json(updated);
-  } catch (err) {
-    console.error("Error al actualizar área:", err);
-
-    if (err.code === "P2025") {
+    if (updated.count === 0) {
       return res.status(404).json({ error: "Área no encontrada" });
     }
 
+    const area = await prisma.area.findFirst({
+      where: { id, tenantId },
+      include: { tables: true },
+    });
+
+    res.json(area);
+  } catch (err) {
+    console.error("Error al actualizar área:", err);
     res.status(500).json({ error: "Error al actualizar área" });
   }
 });
@@ -105,19 +110,26 @@ router.put("/:id", async (req, res) => {
  */
 router.delete("/:id", async (req, res) => {
   try {
+    const tenantId = req.tenantId; // ✅ TENANT
     const id = Number(req.params.id);
 
     if (!Number.isFinite(id)) {
       return res.status(400).json({ error: "ID de área inválido" });
     }
 
-    // Borramos mesas + área en una transacción
+    // Borramos mesas + área en una transacción (aislada por tenant)
     await prisma.$transaction([
       prisma.table.deleteMany({
-        where: { areaId: id },
+        where: {
+          areaId: id,
+          tenantId, // ✅ TENANT
+        },
       }),
-      prisma.area.delete({
-        where: { id },
+      prisma.area.deleteMany({
+        where: {
+          id,
+          tenantId, // ✅ TENANT
+        },
       }),
     ]);
 
@@ -126,11 +138,6 @@ router.delete("/:id", async (req, res) => {
     });
   } catch (err) {
     console.error("Error al eliminar área:", err);
-
-    if (err.code === "P2025") {
-      return res.status(404).json({ error: "Área no encontrada" });
-    }
-
     res.status(500).json({ error: "Error al eliminar área" });
   }
 });

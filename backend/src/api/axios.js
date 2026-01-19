@@ -1,17 +1,18 @@
-// src/api/axios.js
 import axios from "axios";
 
-const API_BASE =
-  import.meta.env.VITE_API_URL?.replace(/\/$/, "") || "http://localhost:4000";
-
 const api = axios.create({
-  baseURL: `${API_BASE}/api`,
+  baseURL: "http://localhost:4000/api",
 });
 
-// Interceptor para agregar token automáticamente
+// Interceptor para agregar token + tenant automáticamente
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem("token");
   if (token) config.headers.Authorization = `Bearer ${token}`;
+
+  // ✅ tenant: desde localStorage (para pruebas) o default
+  const tenantKey = localStorage.getItem("tenant_key") || "default";
+  config.headers["x-tenant"] = tenantKey;
+
   return config;
 });
 

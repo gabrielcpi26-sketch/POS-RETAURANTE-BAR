@@ -7,6 +7,25 @@ datasource db {
 generator client {
   provider = "prisma-client-js"
 }
+
+model Tenant {
+  id            Int            @id @default(autoincrement())
+  key           String         @unique
+  name          String
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  quickProducts QuickProduct[]
+
+  users    User[]
+  areas    Area[]
+  tables   Table[]
+  orders   Order[]
+  reports  DailyReport[]
+  invItems InventoryItem[]
+  invMoves InventoryMovement[]
+  recipes  MenuRecipe[]
+}
+
 model User {
   id           Int      @id @default(autoincrement())
   name         String
@@ -15,101 +34,164 @@ model User {
   role         String   @default("ADMIN")
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+
+  // ✅ MULTI-TENANT
+  tenantId Int?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId])
 }
 
 model Area {
   id          Int      @id @default(autoincrement())
   name        String
   description String?
-  isActive    Boolean  @default(true) // 👈 CAMPO QUE FALTABA
+  isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  tables      Table[]
+  tables Table[]
+
+  // ✅ MULTI-TENANT
+  tenantId Int?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId])
 }
 
 model Table {
-  id        Int      @id @default(autoincrement())
-  name      String
-  number    Int?        // ← número de mesa (opcional)
-  capacity  Int      @default(4)
-  areaId    Int
-  area      Area     @relation(fields: [areaId], references: [id])
+  id       Int    @id @default(autoincrement())
+  name     String
+  number   Int?
+  capacity Int    @default(4)
+
+  areaId Int
+  area   Area @relation(fields: [areaId], references: [id])
+
   isActive  Boolean  @default(true)
   orders    Order[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // ✅ MULTI-TENANT
+  tenantId Int?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId])
+  @@index([areaId])
 }
 
-
 model Order {
-  id        Int      @id @default(autoincrement())
-  table     Table    @relation(fields: [tableId], references: [id])
-  tableId   Int
+  id      Int   @id @default(autoincrement())
+  table   Table @relation(fields: [tableId], references: [id])
+  tableId Int
 
-  // Guardamos los productos como JSON en un String
   items     String
-
   total     Float    @default(0)
   createdAt DateTime @default(now())
 
   paymentMethod String? @default("CASH") // CASH | CARD | TRANSFER
   paymentRef    String?
 
-  isPaid   Boolean  @default(false)
-  paidAt   DateTime?
+  isPaid Boolean   @default(false)
+  paidAt DateTime?
 
-  // ✅ NUEVO (cancelaciones PRO)
-  isCancelled Boolean  @default(false)
+  isCancelled Boolean   @default(false)
   cancelledAt DateTime?
+
+  // ✅ MULTI-TENANT
+  tenantId Int?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId])
+  @@index([tableId])
 }
 
 model DailyReport {
-  id            Int      @id @default(autoincrement())
-  date          DateTime @unique
-  totalOrders   Int
-  totalSales    Float
+  id          Int      @id @default(autoincrement())
+  date        DateTime @unique
+  totalOrders Int
+  totalSales  Float
 
-grossSales     Decimal?
-cancelledSales Decimal?
-netSales       Decimal?
+  grossSales     Decimal?
+  cancelledSales Decimal?
+  netSales       Decimal?
 
-  paymentCash      Float @default(0)
-  paymentCard      Float @default(0)
-  paymentTransfer  Float @default(0)
+  paymentCash     Float @default(0)
+  paymentCard     Float @default(0)
+  paymentTransfer Float @default(0)
 
-  createdAt     DateTime @default(now())
+  createdAt DateTime @default(now())
+
+  // ✅ MULTI-TENANT
+  tenantId Int?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId])
 }
+
 model InventoryItem {
-  id           Int                 @id @default(autoincrement())
+  id           Int      @id @default(autoincrement())
   name         String
-  sku          String?             @unique
+  sku          String?  @unique
   unit         String?
-  currentStock Int                 @default(0)
-isActive     Boolean  @default(true) // 👈 BORRADO SEGURO
-  createdAt    DateTime            @default(now())
-  updatedAt    DateTime            @updatedAt
+  currentStock Int      @default(0)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  movements        InventoryMovement[]
+  movements InventoryMovement[]
 
+  // ✅ MULTI-TENANT
+  tenantId Int?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId])
 }
 
 model InventoryMovement {
   id        Int           @id @default(autoincrement())
   item      InventoryItem @relation(fields: [itemId], references: [id])
   itemId    Int
-  type      String        // "IN" | "OUT"
+  type      String // "IN" | "OUT"
   quantity  Int
   reason    String?
   reference String?
   createdAt DateTime      @default(now())
+
+  // ✅ MULTI-TENANT
+  tenantId Int?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId])
+  @@index([itemId])
 }
 
 model MenuRecipe {
   id        Int      @id @default(autoincrement())
   menuName  String   @unique
-  items     String?  @db.Text  // 👈 ESTE ES EL QUE FALTA
+  items     String?  @db.Text
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // ✅ MULTI-TENANT
+  tenantId Int?
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId])
 }
-	
+
+model QuickProduct {
+  id        Int      @id @default(autoincrement())
+  tenantId  Int
+  name      String
+  price     Float    @default(0)
+  category  String?
+  sort      Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  Tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+}
