@@ -24,6 +24,8 @@ model Tenant {
   invItems InventoryItem[]
   invMoves InventoryMovement[]
   recipes  MenuRecipe[]
+tenantPlan tenant_plan?
+
 }
 
 model User {
@@ -194,4 +196,14 @@ model QuickProduct {
   Tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
+}
+
+model tenant_plan {
+  tenant_id Int     @id
+  plan      String
+  updated_at DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
+
+  @@map("tenant_plan")
 }
