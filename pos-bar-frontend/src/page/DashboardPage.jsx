@@ -67,6 +67,14 @@ window.dispatchInventoryRefresh = () => {
 // =======================
 const THEME_STORAGE_KEY = "pos_theme_v1";
 const CUSTOM_PRIMARY_STORAGE_KEY = "pos_theme_primary_v1";
+const ENV_THEME = (import.meta.env.VITE_POS_THEME || "").trim().toLowerCase();
+const THEME_ENV_MAP = {
+  pro: "darkPro",
+  darkpro: "darkPro",
+  aqua: "aqua",
+  gold: "gold",
+};
+
 
 const THEME_PRESETS = {
   darkPro: {
@@ -1077,6 +1085,13 @@ useEffect(() => {
   return () => { alive = false; };
 }, [tenantKey]);
 
+useEffect(() => {
+  // Fuerza tema por ENV (Vercel) para que no mande un tema viejo guardado en el navegador
+  if (ENV_THEME) {
+    const mapped = THEME_ENV_MAP[ENV_THEME] || "darkPro";
+    localStorage.setItem(THEME_STORAGE_KEY, mapped);
+  }
+}, []);
 
 
 // 1) Cargar desde localStorage (SOLO lee) — por tenant
