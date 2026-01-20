@@ -83,7 +83,8 @@ const THEME_PRESETS = {
     bgGradient:
       "radial-gradient(circle at top, #0f172a 0, #020617 55%, #000 100%)",
     cardBg: "rgba(15,23,42,0.98)",
-    border: "rgba(148,163,184,0.25)",
+    border: "rgba(34,197,94,0.35)", // verde (igual vibe PRO)
+
     primary: "#22c55e",
     primarySoft: "rgba(34,197,94,0.4)",
     text: "#e5e7eb",
@@ -5970,10 +5971,28 @@ onChange={(e) =>
     key={p.id}
     type="button"
     onClick={() => handleQuickProductClick(p)}
+    style={{
+      textAlign: "left",
+      padding: "12px",
+      borderRadius: 16,
+
+      // 👇 ESTE ES EL FIX CLAVE
+      border: "1px solid var(--pos-primary, #22c55e)",
+
+      boxShadow: "0px 0px 0px 1px rgba(148,163,184,0.25)",
+      background: "rgba(2,6,23,0.35)",
+      color: "var(--pos-text, #e5e7eb)",
+      cursor: "pointer",
+      opacity: 1,
+    }}
   >
-    ...
+    <div style={{ fontWeight: 900, fontSize: 13 }}>{p.name}</div>
+    <div style={{ fontSize: 12, opacity: 0.85, marginTop: 6 }}>
+      ${p.price}
+    </div>
   </button>
 ))}
+
 */}
 
                         </div>
