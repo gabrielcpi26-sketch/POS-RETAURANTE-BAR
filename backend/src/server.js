@@ -37,6 +37,7 @@ app.use(
         origin === "https://pos-restaurante-bar.vercel.app" ||
         origin.endsWith(".vercel.app") ||
         origin === "https://pos-restaurante-bar.onrender.com";
+origin === "https://elgallo.gadiapps.com"; // ✅ NUEVO
 
       return allow
         ? callback(null, true)
