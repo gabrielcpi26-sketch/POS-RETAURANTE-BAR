@@ -32,12 +32,13 @@ app.use(
       if (!origin) return callback(null, true);
 
       const allow =
-        origin === "http://localhost:5173" ||
-        origin.endsWith(".localhost:5173") ||
-        origin === "https://pos-restaurante-bar.vercel.app" ||
-        origin.endsWith(".vercel.app") ||
-        origin === "https://pos-restaurante-bar.onrender.com";
-origin === "https://elgallo.gadiapps.com"; // ✅ NUEVO
+  origin === "http://localhost:5173" ||
+  origin.endsWith(".localhost:5173") ||
+  origin === "https://pos-restaurante-bar.vercel.app" ||
+  origin.endsWith(".vercel.app") ||
+  origin === "https://pos-restaurante-bar.onrender.com" ||
+  origin === "https://elgallo.gadiapps.com" ||   // ✅
+  origin.endsWith(".gadiapps.com");               // ✅
 
       return allow
         ? callback(null, true)
