@@ -2,11 +2,11 @@
 const express = require("express");
 const router = express.Router();
 const { PrismaClient } = require("@prisma/client");
-const db = prisma;
+
 
 
 const prisma = new PrismaClient();
-
+const db = prisma;
 const startOfDay = (date = new Date()) => {
   const d = new Date(date);
   d.setHours(0, 0, 0, 0);

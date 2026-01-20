@@ -12,13 +12,15 @@ router.get("/", async (req, res) => {
 
   const rows = await prisma.$queryRaw`
   select config
-  from public.quick_menu_config
+from public.quick_menu_config
+
   where tenant_id = ${tenantId}
   limit 1
 `;
 
 const items = rows?.[0]?.config?.items || [];
 return res.json({ items });
+
 
   } catch (e) {
     console.error("❌ quick-products GET error:", e);
