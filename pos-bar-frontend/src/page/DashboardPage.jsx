@@ -756,46 +756,72 @@ WebkitTextFillColor: "var(--pos-text, #e5e7eb)",
 };
 
 
-  // =======================
-  // PIN MESERO (solo /mesero)
-  // =======================
-  const [meseroPinInput, setMeseroPinInput] = useState("");
-  const [meseroPinOk, setMeseroPinOk] = useState(false);
-  const [meseroPinError, setMeseroPinError] = useState("");
+// =======================
+// PIN MESERO (solo /mesero)
+// =======================
+const [meseroPinInput, setMeseroPinInput] = useState("");
+const [meseroPinOk, setMeseroPinOk] = useState(false);
+const [meseroPinError, setMeseroPinError] = useState("");
+const [tenantConfig, setTenantConfig] = useState(null);
 
-  const MESERO_PIN = import.meta.env?.VITE_MESERO_PIN || "0000";
+// ✅ ANTES: import.meta.env VITE_MESERO_PIN || "0000"
+// ✅ AHORA: por tenant (si no llega aún, cae a env o "0000")
+const MESERO_PIN = String(
+  tenantConfig?.meseroPin ??
+  import.meta.env?.VITE_MESERO_PIN ??
+  "0000"
+);
 
-  function verifyMeseroPin() {
-    const clean = String(meseroPinInput || "").trim();
-    if (!clean) return setMeseroPinError("Ingresa el PIN");
-    if (clean === String(MESERO_PIN)) {
-      setMeseroPinError("");
-      setMeseroPinOk(true);
-      return;
-    }
-    setMeseroPinError("PIN incorrecto");
+
+
+useEffect(() => {
+  async function loadTenantConfig() {
+    const tenantKey = getTenantKeySafe();
+    const res = await fetch(`${API_URL}/api/tenant-config`, {
+      headers: { "x-tenant": tenantKey },
+    });
+    const data = await res.json();
+    setTenantConfig(data);
   }
+  loadTenantConfig();
+}, []);
 
-  // =======================
-  // LOGO
-  // =======================
-  const [logoUrl, setLogoUrl] = useState(() => {
-    try {
-      return localStorage.getItem("pos_logo_url") || "";
-    } catch {
-      return "";
-    }
-  });
-  const [showLogoEditor, setShowLogoEditor] = useState(false);
-  const [tempLogoUrl, setTempLogoUrl] = useState(() => logoUrl);
 
-  function handleSaveLogo() {
-    try {
-      localStorage.setItem("pos_logo_url", tempLogoUrl || "");
-    } catch {}
-    setLogoUrl(tempLogoUrl || "");
-    setShowLogoEditor(false);
+function verifyMeseroPin() {
+  const clean = String(meseroPinInput || "").trim();
+  if (!clean) return setMeseroPinError("Ingresa el PIN");
+  if (clean === String(MESERO_PIN)) {
+    setMeseroPinError("");
+    setMeseroPinOk(true);
+    return;
   }
+  setMeseroPinError("PIN incorrecto");
+}
+
+
+// =======================
+// LOGO
+// =======================
+const logoStorageKey = `pos_logo_url__${getTenantKeySafe() || "default"}`;
+
+
+const [logoUrl, setLogoUrl] = useState(() => {
+  try {
+    return localStorage.getItem(logoStorageKey) || "";
+  } catch {
+    return "";
+  }
+});
+const [showLogoEditor, setShowLogoEditor] = useState(false);
+const [tempLogoUrl, setTempLogoUrl] = useState(() => logoUrl);
+
+function handleSaveLogo() {
+  try {
+    localStorage.setItem(logoStorageKey, tempLogoUrl || "");
+  } catch {}
+  setLogoUrl(tempLogoUrl || "");
+  setShowLogoEditor(false);
+}
 
 
 
@@ -813,6 +839,7 @@ const tenantKey =
   tenantKeyRaw && tenantKeyRaw !== "null" && tenantKeyRaw !== "undefined"
     ? tenantKeyRaw
     : "default";
+
 
 const res = await fetch(`${API_URL}/api/orders/debug/inventory-items`, {
   cache: "no-store",

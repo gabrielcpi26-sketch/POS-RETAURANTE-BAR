@@ -1,47 +1,11 @@
-datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
-}
-
 generator client {
   provider = "prisma-client-js"
 }
 
-model Tenant {
-  id            Int            @id @default(autoincrement())
-  key           String         @unique
-  name          String
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
-  quickProducts QuickProduct[]
-
-  users    User[]
-  areas    Area[]
-  tables   Table[]
-  orders   Order[]
-  reports  DailyReport[]
-  invItems InventoryItem[]
-  invMoves InventoryMovement[]
-  recipes  MenuRecipe[]
-tenantPlan tenant_plan?
-
-}
-
-model User {
-  id           Int      @id @default(autoincrement())
-  name         String
-  email        String   @unique
-  passwordHash String
-  role         String   @default("ADMIN")
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-
-  // ✅ MULTI-TENANT
-  tenantId Int?
-  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Restrict)
-
-  @@index([tenantId])
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 model Area {
@@ -50,136 +14,93 @@ model Area {
   description String?
   isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  tables Table[]
-
-  // ✅ MULTI-TENANT
-  tenantId Int?
-  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  updatedAt   DateTime
+  tenantId    Int?
+  Tenant      Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  Table       Table[]
 
   @@index([tenantId])
-}
-
-model Table {
-  id       Int    @id @default(autoincrement())
-  name     String
-  number   Int?
-  capacity Int    @default(4)
-
-  areaId Int
-  area   Area @relation(fields: [areaId], references: [id])
-
-  isActive  Boolean  @default(true)
-  orders    Order[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // ✅ MULTI-TENANT
-  tenantId Int?
-  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Restrict)
-
-  @@index([tenantId])
-  @@index([areaId])
-}
-
-model Order {
-  id      Int   @id @default(autoincrement())
-  table   Table @relation(fields: [tableId], references: [id])
-  tableId Int
-
-  items     String
-  total     Float    @default(0)
-  createdAt DateTime @default(now())
-
-  paymentMethod String? @default("CASH") // CASH | CARD | TRANSFER
-  paymentRef    String?
-
-  isPaid Boolean   @default(false)
-  paidAt DateTime?
-
-  isCancelled Boolean   @default(false)
-  cancelledAt DateTime?
-
-  // ✅ MULTI-TENANT
-  tenantId Int?
-  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Restrict)
-
-  @@index([tenantId])
-  @@index([tableId])
 }
 
 model DailyReport {
-  id          Int      @id @default(autoincrement())
-  date        DateTime @unique
-  totalOrders Int
-  totalSales  Float
-
-  grossSales     Decimal?
-  cancelledSales Decimal?
-  netSales       Decimal?
-
-  paymentCash     Float @default(0)
-  paymentCard     Float @default(0)
-  paymentTransfer Float @default(0)
-
-  createdAt DateTime @default(now())
-
-  // ✅ MULTI-TENANT
-  tenantId Int?
-  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  id              Int      @id @default(autoincrement())
+  date            DateTime @unique
+  totalOrders     Int
+  totalSales      Float
+  paymentCash     Float    @default(0)
+  paymentCard     Float    @default(0)
+  paymentTransfer Float    @default(0)
+  createdAt       DateTime @default(now())
+  cancelledSales  Decimal?
+  grossSales      Decimal?
+  netSales        Decimal?
+  tenantId        Int?
+  Tenant          Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Restrict)
 
   @@index([tenantId])
 }
 
 model InventoryItem {
-  id           Int      @id @default(autoincrement())
-  name         String
-  sku          String?  @unique
-  unit         String?
-  currentStock Int      @default(0)
-  isActive     Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-
-  movements InventoryMovement[]
-
-  // ✅ MULTI-TENANT
-  tenantId Int?
-  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  id                Int                 @id @default(autoincrement())
+  name              String
+  sku               String?             @unique
+  unit              String?
+  currentStock      Int                 @default(0)
+  isActive          Boolean             @default(true)
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime
+  tenantId          Int?
+  Tenant            Tenant?             @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  InventoryMovement InventoryMovement[]
 
   @@index([tenantId])
 }
 
 model InventoryMovement {
-  id        Int           @id @default(autoincrement())
-  item      InventoryItem @relation(fields: [itemId], references: [id])
-  itemId    Int
-  type      String // "IN" | "OUT"
-  quantity  Int
-  reason    String?
-  reference String?
-  createdAt DateTime      @default(now())
+  id            Int           @id @default(autoincrement())
+  itemId        Int
+  type          String
+  quantity      Int
+  reason        String?
+  reference     String?
+  createdAt     DateTime      @default(now())
+  tenantId      Int?
+  InventoryItem InventoryItem @relation(fields: [itemId], references: [id])
+  Tenant        Tenant?       @relation(fields: [tenantId], references: [id], onDelete: Restrict)
 
-  // ✅ MULTI-TENANT
-  tenantId Int?
-  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Restrict)
-
-  @@index([tenantId])
   @@index([itemId])
+  @@index([tenantId])
 }
 
 model MenuRecipe {
   id        Int      @id @default(autoincrement())
   menuName  String   @unique
-  items     String?  @db.Text
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime
+  items     String?
+  tenantId  Int?
+  Tenant    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Restrict)
 
-  // ✅ MULTI-TENANT
-  tenantId Int?
-  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+  @@index([tenantId])
+}
 
+model Order {
+  id            Int       @id @default(autoincrement())
+  tableId       Int
+  items         String
+  total         Float     @default(0)
+  createdAt     DateTime  @default(now())
+  paymentMethod String?   @default("CASH")
+  paymentRef    String?
+  isPaid        Boolean   @default(false)
+  paidAt        DateTime?
+  cancelledAt   DateTime?
+  isCancelled   Boolean   @default(false)
+  tenantId      Int?
+  Table         Table     @relation(fields: [tableId], references: [id])
+  Tenant        Tenant?   @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@index([tableId])
   @@index([tenantId])
 }
 
@@ -191,19 +112,90 @@ model QuickProduct {
   category  String?
   sort      Int      @default(0)
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  Tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  updatedAt DateTime
+  Tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
 }
 
+model Table {
+  id        Int      @id @default(autoincrement())
+  name      String
+  number    Int?
+  capacity  Int      @default(4)
+  areaId    Int
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime
+  tenantId  Int?
+  Order     Order[]
+  Area      Area     @relation(fields: [areaId], references: [id])
+  Tenant    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@index([areaId])
+  @@index([tenantId])
+}
+
+model Tenant {
+  id                Int                 @id @default(autoincrement())
+  key               String              @unique
+  name              String
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime
+  adminpin          String?
+  employeepin       String?
+  displayname       String?
+  Area              Area[]
+  DailyReport       DailyReport[]
+  InventoryItem     InventoryItem[]
+  InventoryMovement InventoryMovement[]
+  MenuRecipe        MenuRecipe[]
+  Order             Order[]
+  QuickProduct      QuickProduct[]
+  Table             Table[]
+  User              User[]
+  quick_menu_config quick_menu_config?
+  tenant_config     tenant_config?
+  tenant_plan       tenant_plan?
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         String   @default("ADMIN")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime
+  tenantId     Int?
+  Tenant       Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId])
+}
+
+model quick_menu_config {
+  tenant_id  Int      @id
+  config     Json     @default("{}")
+  updated_at DateTime @default(now()) @db.Timestamptz(6)
+  Tenant     Tenant   @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([tenant_id], map: "idx_quick_menu_config_tenant_id")
+}
+
+model tenant_config {
+  id            BigInt   @id @default(autoincrement())
+  tenant_id     BigInt   @unique(map: "tenant_config_tenant_id_unique")
+  business_name String?
+  admin_pin     String?
+  mesero_pin    String?
+  created_at    DateTime @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime @default(now()) @db.Timestamptz(6)
+  Tenant        Tenant   @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
 model tenant_plan {
-  tenant_id Int     @id
-  plan      String
+  tenant_id  Int      @id
+  plan       String
   updated_at DateTime @default(now())
-
-  tenant Tenant @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
-
-  @@map("tenant_plan")
+  Tenant     Tenant   @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
 }

@@ -22,9 +22,53 @@ const inventoryRoutes = require("./routes/inventory.routes");
 const menuRecipesRoutes = require("./routes/menuRecipes.routes");
 const quickProductsRoutes = require("./routes/quickProducts.routes");
 const onboardingRoutes = require("./routes/onboarding.routes");
+const tenantConfigRoutes = require("./routes/tenantConfig.routes");
 
 
 const app = express();
+
+// ===============================
+// TENANT KEY automático por dominio
+// ===============================
+app.use((req, res, next) => {
+  try {
+    // 1) Prioridad: header explícito (frontend)
+    const fromHeader =
+      req.headers["x-tenant"] ||
+      req.headers["x-tenant-key"] ||
+      req.headers["tenant"];
+
+    if (fromHeader) {
+      req.tenantKey = String(fromHeader).trim().toLowerCase();
+      return next();
+    }
+
+    // 2) Si viene detrás de proxy (render/vercel)
+    const rawHost =
+      req.headers["x-forwarded-host"] ||
+      req.headers["host"] ||
+      "";
+
+    const host = String(rawHost).split(",")[0].trim().toLowerCase();
+    const hostname = host.split(":")[0]; // quita puerto
+
+    // localhost => default
+    if (!hostname || hostname.includes("localhost") || hostname.includes("127.0.0.1")) {
+      req.tenantKey = "default";
+      return next();
+    }
+
+    // subdominio.gadiapps.com => subdominio
+    const parts = hostname.split(".");
+    req.tenantKey = parts[0] || "default";
+
+    return next();
+  } catch (e) {
+    req.tenantKey = "default";
+    return next();
+  }
+});
+
 
 app.use(
   cors({
@@ -60,6 +104,9 @@ app.use(express.json());
 // TENANT (multi-negocio) - detección por subdominio o header
 // ======================
 app.use((req, _res, next) => {
+  // ✅ SI YA VIENE SETEADO ARRIBA, NO LO PISES
+  if (req.tenantKey) return next();
+
   const fromHeader = (req.headers["x-tenant-key"] || req.headers["x-tenant"] || "")
     .toString()
     .trim();
@@ -67,7 +114,6 @@ app.use((req, _res, next) => {
   const host = (req.headers.host || "").toString().split(":")[0];
   const parts = host.split(".");
   const subdomain = parts.length >= 2 && parts[parts.length - 1] === "localhost" ? parts[0] : (parts.length >= 3 ? parts[0] : "");
-
 
   req.tenantKey = fromHeader || subdomain || "default";
   next();
@@ -81,32 +127,45 @@ app.use(async (req, _res, next) => {
     const key = (req.tenantKey || "default").toString().trim() || "default";
 
 // ✅ findUnique SIEMPRE debe llevar where con campo UNIQUE
-let t = await prisma.tenant.findUnique({
- where: { key: key }
- // <-- si tu campo NO se llama "key", lee nota abajo
-});
+    // ✅ 1) intenta por tabla Tenant (si existe ahí)
+    let t = await prisma.tenant.findUnique({
+      where: { key },
+      select: { id: true },
+    });
 
-if (!t) {
-  t = await prisma.tenant.create({
-    data: { key: key, name: key },
-  });
-}
+    // ✅ 2) si NO existe, fallback a tenant_config por business_name (TU CASO)
+    if (!t?.id) {
+      const cfg = await prisma.tenant_config.findFirst({
+        where: { business_name: key },
+        select: { tenant_id: true },
+      });
 
+      if (cfg?.tenant_id) {
+        req.tenantId = Number(cfg.tenant_id); // ✅ seguro
+      } else {
+        // ✅ NO TRUENA: tenant no encontrado
+        req.tenantId = null;
+      }
+    } else {
+      req.tenantId = t.id; // (int)
+    }
 
-    req.tenantId = t.id; // BigInt
 
     // ✅ PLAN por tenant (default FREE si no existe registro)
-    req.tenantPlan = "FREE";
-    try {
-      const rows = await prisma.$queryRaw`
-        select plan from public.tenant_plan
-        where tenant_id = ${req.tenantId}
-        limit 1
-      `;
-      req.tenantPlan = ((rows && rows[0] && rows[0].plan) ? rows[0].plan : "FREE").toString();
-    } catch (e) {
-      req.tenantPlan = "FREE";
+        req.tenantPlan = "FREE";
+    if (req.tenantId) {
+      try {
+        const rows = await prisma.$queryRaw`
+          select plan from public.tenant_plan
+          where tenant_id = ${req.tenantId}
+          limit 1
+        `;
+        req.tenantPlan = ((rows && rows[0] && rows[0].plan) ? rows[0].plan : "FREE").toString();
+      } catch (e) {
+        req.tenantPlan = "FREE";
+      }
     }
+
 
     return next();
   } catch (e) {
@@ -123,6 +182,35 @@ app.get("/api/tenant/plan", (req, res) => {
   res.json({ ok: true, tenantKey: req.tenantKey, plan: req.tenantPlan || "FREE" });
 });
 
+app.get("/api/tenant/config", async (req, res) => {
+  try {
+    const tenantKey = (req.headers["x-tenant-key"] || req.headers["x-tenant"] || req.tenantKey || "")
+      .toString()
+      .trim()
+      .toLowerCase();
+
+    if (!tenantKey) return res.status(400).json({ error: "Missing tenant key" });
+
+    const cfg = await prisma.tenant_config.findFirst({
+      where: { business_name: tenantKey },
+      select: { business_name: true, admin_pin: true, mesero_pin: true },
+    });
+
+    if (!cfg) {
+      return res.status(404).json({ error: "TENANT_NOT_FOUND", tenantKey });
+    }
+
+    return res.json({
+      businessName: cfg.business_name,
+      adminPin: cfg.admin_pin || "1234",
+      meseroPin: cfg.mesero_pin || "0000",
+    });
+  } catch (e) {
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+
 // Routers
 app.use("/api/auth", authRoutes);
 app.use("/api/areas", areasRoutes);
@@ -133,6 +221,7 @@ app.use("/api/inventory", inventoryRoutes);
 app.use("/api/menu-recipes", menuRecipesRoutes);
 app.use("/api/quick-products", quickProductsRoutes.default || quickProductsRoutes);
 app.use("/api/onboarding", onboardingRoutes);
+app.use("/api/tenant-config", tenantConfigRoutes);
 
 // Puerto
 const PORT = process.env.PORT || 4000;

@@ -51,10 +51,11 @@ async function resolveTenant(req) {
   const tenantKey = String(tenantKeyRaw).trim().toLowerCase();
 
   const tenant = await prisma.tenant.upsert({
-    where: { key: tenantKey },
-    update: {},
-    create: { key: tenantKey, name: tenantKey },
-  });
+  where: { key: tenantKey },
+  update: {},
+  create: { key: tenantKey, name: tenantKey },
+});
+
 
   return tenant; // { id, key, name, ... }
 }
