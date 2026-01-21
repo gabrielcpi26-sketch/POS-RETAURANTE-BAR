@@ -11,12 +11,11 @@ const router = express.Router();
  */
 router.get("/", async (req, res) => {
   try {
-  const tables = await prisma.table.findMany({
-  where: { tenantId: req.tenantId },
-  include: { area: true },
-  orderBy: { id: "asc" },
-});
-
+    const tables = await prisma.table.findMany({
+      where: { tenantId: req.tenantId },
+      include: { Area: true }, // ✅ FIX (antes: area)
+      orderBy: { id: "asc" },
+    });
 
     res.json(tables);
   } catch (err) {
@@ -28,26 +27,17 @@ router.get("/", async (req, res) => {
 /**
  * POST /api/tables
  * Crea una mesa nueva
- * Body esperado (number ahora es opcional):
- * {
- *   "name": "Mesa 1",
- *   "areaId": 1,
- *   "number": 1 (opcional),
- *   "capacity": 4 (opcional)
- * }
  */
 router.post("/", async (req, res) => {
   try {
     let { name, number, areaId, capacity } = req.body;
 
-    // Validar mínimos: nombre y área
     if (!name || !areaId) {
       return res.status(400).json({
         error: "name y areaId son obligatorios",
       });
     }
 
-    // Aseguramos que areaId sea número
     const areaIdNumber = Number(areaId);
     if (!Number.isFinite(areaIdNumber)) {
       return res.status(400).json({
@@ -55,7 +45,6 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // Si no viene number, calculamos el siguiente consecutivo en esa área
     let finalNumber = Number(number);
     if (!Number.isFinite(finalNumber)) {
       const lastTable = await prisma.table.findFirst({
@@ -66,7 +55,7 @@ router.post("/", async (req, res) => {
       finalNumber = lastTable ? (lastTable.number || 0) + 1 : 1;
     }
 
- const table = await prisma.table.create({
+  const table = await prisma.table.create({
   data: {
     tenantId: req.tenantId,
     name,
@@ -74,6 +63,7 @@ router.post("/", async (req, res) => {
     areaId: areaIdNumber,
     capacity: capacity ?? 4,
     isActive: true,
+    updatedAt: new Date(), // ✅ FIX CRÍTICO
   },
 });
 
@@ -85,3 +75,4 @@ router.post("/", async (req, res) => {
 });
 
 module.exports = router;
+
