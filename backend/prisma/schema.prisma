@@ -184,7 +184,7 @@ model quick_menu_config {
 
 model tenant_config {
   id            BigInt   @id @default(autoincrement())
-  tenant_id     BigInt   @unique(map: "tenant_config_tenant_id_unique")
+  tenant_id     Int      @unique(map: "tenant_config_tenant_id_unique")
   business_name String?
   admin_pin     String?
   mesero_pin    String?
