@@ -417,6 +417,43 @@ const [printers, setPrinters] = useState([]);
     root.style.setProperty("--pos-danger", t.danger);
   }, [activeTheme]);
 
+
+useEffect(() => {
+  if (!printerName) return;
+
+  const interval = setInterval(async () => {
+    try {
+      const tenantKey = localStorage.getItem("tenant_key") || "default";
+
+      const res = await fetch(`${API_URL}/api/orders?print=pending`, {
+        headers: { "X-Tenant-Key": tenantKey },
+      });
+
+      if (!res.ok) return;
+
+      const orders = await res.json();
+      if (!Array.isArray(orders) || orders.length === 0) return;
+
+      for (const order of orders) {
+        printTicket(order); // 👈 USA TU FUNCIÓN EXISTENTE
+      }
+    } catch (e) {
+      console.warn("Printer polling error", e);
+    }
+  }, 3000); // cada 3s
+
+  return () => clearInterval(interval);
+}, [printerName]);
+
+
+useEffect(() => {
+  // Conecta QZ solo en la tablet (caja)
+  if (!window.qz) return;
+
+  qz.websocket.connect().catch(() => {});
+}, []);
+
+
   // =======================
   // TABS
   // =======================
@@ -3429,9 +3466,31 @@ appName="POS"
       }
     );
 
+const printTicketForTenant = async (ticketText) => {
+  if (!window.qz) {
+    alert("QZ Tray no disponible en esta tablet");
+    return;
+  }
+
+  const tenant = localStorage.getItem("x-tenant"); // 🔒 tenant actual
+  const printerKey = `printer_${tenant}`;
+
+  const savedPrinter = localStorage.getItem(printerKey);
+  if (!savedPrinter) {
+    alert("No hay impresora configurada para este restaurante");
+    return;
+  }
+
+  const config = qz.configs.create(savedPrinter);
+  await qz.print(config, [ticketText]);
+};
+
+
     // 🖨️ Imprimir ticket (si existe printTicket / QZ listo)
     try {
       const currentOrder = ordersByTable[selectedTable.id] || { items: [] };
+
+
 
       // ✅ IMPORTANTE: aquí llama TU función real de impresión
       // (la que ya usas en "Imprimir prueba" / QZ Tray)
@@ -3486,6 +3545,8 @@ appName="POS"
     </div>
   </div>
 )}
+
+
 
 
 {/* ===== MODAL CAJA (admin) ===== */}
