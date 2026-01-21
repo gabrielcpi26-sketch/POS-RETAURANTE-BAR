@@ -1,4 +1,3 @@
-// backend/src/routes/areas.routes.js
 const express = require("express");
 const { PrismaClient } = require("@prisma/client");
 
@@ -16,7 +15,7 @@ router.get("/", async (req, res) => {
     const areas = await prisma.area.findMany({
       where: { tenantId }, // ✅ TENANT
       include: {
-        tables: true,
+        Table: true, // ✅ FIX PRISMA (antes: tables)
       },
       orderBy: { id: "asc" },
     });
@@ -41,7 +40,6 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ error: "El campo 'name' es obligatorio" });
     }
 
-    // ✅ Crear área CON tenantId (misma lógica, sin inventar nada)
     const area = await prisma.area.create({
       data: {
         name: name.trim(),
@@ -94,7 +92,9 @@ router.put("/:id", async (req, res) => {
 
     const area = await prisma.area.findFirst({
       where: { id, tenantId },
-      include: { tables: true },
+      include: {
+        Table: true, // ✅ FIX PRISMA (antes: tables)
+      },
     });
 
     res.json(area);
@@ -117,7 +117,6 @@ router.delete("/:id", async (req, res) => {
       return res.status(400).json({ error: "ID de área inválido" });
     }
 
-    // Borramos mesas + área en una transacción (aislada por tenant)
     await prisma.$transaction([
       prisma.table.deleteMany({
         where: {
@@ -133,7 +132,7 @@ router.delete("/:id", async (req, res) => {
       }),
     ]);
 
-    return res.json({
+    res.json({
       message: "Área y sus mesas eliminadas correctamente",
     });
   } catch (err) {
