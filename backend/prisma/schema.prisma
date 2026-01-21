@@ -141,8 +141,8 @@ model Tenant {
   key               String              @unique
   name              String
   createdAt         DateTime            @default(now())
-  updatedAt         DateTime
-  adminpin          String?
+  updatedAt         DateTime            @default(now())
+  adminpin            String?
   employeepin       String?
   displayname       String?
   Area              Area[]
