@@ -4,10 +4,6 @@ const express = require("express");
 const router = express.Router();
 const { PrismaClient } = require("@prisma/client");
 
-
-
-
-
 const prisma = new PrismaClient();
 console.log("✅ [BOOT] orders.routes.js CARGADO -", __filename, "time:", new Date().toISOString());
 
@@ -42,7 +38,6 @@ async function resolveTenant(req) {
   req.tenantId = tenant.id;
   return tenant;
 }
-
 
 // aplica tenant a TODO este router (mínimo, sin tocar endpoints)
 router.use(async (req, res, next) => {
@@ -105,24 +100,23 @@ async function applyInventoryFromOrderItems(items, db = prisma, tenantId = null)
       // ✅ 0) SI VIENE  -> DESCUENTA RECETA (BOM)
       // =============================================
       const recipeIdRaw =
-  rawItem.menuRecipeId ??
-  rawItem.menuRecipeID ??
-  rawItem.menu_recipe_id ??
-  rawItem.menu_recipe_ID ??
-  null;
+        rawItem.menuRecipeId ??
+        rawItem.menuRecipeID ??
+        rawItem.menu_recipe_id ??
+        rawItem.menu_recipe_ID ??
+        null;
 
       const recipeId = recipeIdRaw ? Number(recipeIdRaw) : null;
 
       if (recipeId && Number.isFinite(recipeId)) {
         // ✅ TENANT: receta aislada
         const recipe = await db.menuRecipe.findFirst({
-  where: tenantId ? { id: recipeId, tenantId } : { id: recipeId },
-  select: {
-    id: true,
-    items: true, // ✅ items = JSON (ingredientes)
-  },
-});
-
+          where: tenantId ? { id: recipeId, tenantId } : { id: recipeId },
+          select: {
+            id: true,
+            items: true, // ✅ items = JSON (ingredientes)
+          },
+        });
 
         if (!recipe) {
           throw new Error(`Receta ${recipeId} no existe`);
@@ -333,23 +327,22 @@ async function revertInventoryFromOrderItems(items, db = prisma, orderId = null,
       // ✅ 0) SI VIENE menuRecipeId -> DEVOLVER RECETA (BOM)
       // =============================================
       const recipeIdRaw =
-  rawItem.menuRecipeId ??
-  rawItem.menuRecipeID ??
-  rawItem.menu_recipe_id ??
-  rawItem.menu_recipe_ID ??
-  null;
+        rawItem.menuRecipeId ??
+        rawItem.menuRecipeID ??
+        rawItem.menu_recipe_id ??
+        rawItem.menu_recipe_ID ??
+        null;
 
       const recipeId = recipeIdRaw ? Number(recipeIdRaw) : null;
 
       if (recipeId && Number.isFinite(recipeId)) {
-       const recipe = await db.menuRecipe.findFirst({
-  where: tenantId ? { id: recipeId, tenantId } : { id: recipeId },
-  select: {
-    id: true,
-    items: true, // ✅ items = JSON (ingredientes)
-  },
-});
-
+        const recipe = await db.menuRecipe.findFirst({
+          where: tenantId ? { id: recipeId, tenantId } : { id: recipeId },
+          select: {
+            id: true,
+            items: true, // ✅ items = JSON (ingredientes)
+          },
+        });
 
         if (!recipe) {
           throw new Error(`Rollback: receta ${recipeId} no existe (orden #${orderId ?? "?"})`);
@@ -552,7 +545,7 @@ router.post("/", async (req, res) => {
             paymentMethod,
             paymentRef,
           },
-          include: { table: true },
+          include: { Table: true }, // ✅ FIX: Prisma relation real
         })
       : await prisma.order.create({
           data: {
@@ -564,7 +557,7 @@ router.post("/", async (req, res) => {
             paymentMethod,
             paymentRef,
           },
-          include: { table: true },
+          include: { Table: true }, // ✅ FIX: Prisma relation real
         });
 
     // ✅ REGLA #1: aquí NO se descuenta inventario.
@@ -587,7 +580,8 @@ router.get("/", async (req, res) => {
       where: { tenantId },
       orderBy: { createdAt: "desc" },
       include: {
-        table: true,
+        Table: true,  // ✅ FIX
+        Tenant: true, // ✅ FIX (si existe en tu schema)
       },
     });
 
@@ -636,7 +630,7 @@ router.get("/admin/summary", async (req, res) => {
         isPaid: true, // ✅ SOLO pagadas
       },
       include: {
-        table: true,
+        Table: true, // ✅ FIX
       },
       orderBy: {
         createdAt: "desc",
@@ -662,7 +656,7 @@ router.get("/admin/summary", async (req, res) => {
 
       return {
         id: o.id,
-        tableName: o.table ? o.table.name : `Mesa ${o.tableId}`,
+        tableName: o.Table ? o.Table.name : `Mesa ${o.tableId}`, // ✅ FIX
         total: o.total,
         createdAt: o.createdAt,
         items,
@@ -670,7 +664,7 @@ router.get("/admin/summary", async (req, res) => {
     });
 
     for (const o of ordersValid) {
-      const tableName = o.table ? o.table.name : `Mesa ${o.tableId}`;
+      const tableName = o.Table ? o.Table.name : `Mesa ${o.tableId}`; // ✅ FIX
 
       if (!salesByTableMap[tableName]) {
         salesByTableMap[tableName] = {
@@ -728,7 +722,6 @@ router.get("/admin/summary", async (req, res) => {
 });
 
 // DEBUG inventario
-
 router.get("/debug/inventory-items", async (req, res) => {
   try {
     // 🔥 BACKWARD COMPATIBLE
@@ -765,8 +758,6 @@ router.get("/debug/inventory-items", async (req, res) => {
     return res.status(500).json({ error: "Inventory debug error" });
   }
 });
-
-
 
 // HISTÓRICO ventas
 router.get("/history", async (req, res) => {
@@ -815,7 +806,7 @@ router.get("/admin/summary-today", async (req, res) => {
         createdAt: { gte: start, lt: end },
         isPaid: true, // ✅ SOLO pagadas para corte/resumen
       },
-      include: { table: true },
+      include: { Table: true }, // ✅ FIX
       orderBy: { createdAt: "desc" },
     });
 
@@ -838,7 +829,7 @@ router.get("/admin/summary-today", async (req, res) => {
       } catch {}
       return {
         id: o.id,
-        tableName: o.table ? o.table.name : `Mesa ${o.tableId}`,
+        tableName: o.Table ? o.Table.name : `Mesa ${o.tableId}`, // ✅ FIX
         total: o.total,
         createdAt: o.createdAt,
         items,
