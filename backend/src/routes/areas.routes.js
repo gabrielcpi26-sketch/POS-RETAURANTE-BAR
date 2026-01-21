@@ -1,3 +1,4 @@
+// backend/src/routes/areas.routes.js
 const express = require("express");
 const { PrismaClient } = require("@prisma/client");
 
@@ -7,17 +8,21 @@ const router = express.Router();
 /**
  * GET /api/areas
  * Lista todas las áreas con sus mesas
+ * (Mantiene compatibilidad: responde "tables" para el front)
  */
 router.get("/", async (req, res) => {
   try {
     const tenantId = req.tenantId; // ✅ TENANT
 
-    const areas = await prisma.area.findMany({
-      where: { tenantId }, // ✅ TENANT
-      include: {
-        Table: true, // ✅ FIX PRISMA (antes: tables)
-      },
+    const areasRaw = await prisma.area.findMany({
+      where: { tenantId },
+      include: { Table: true }, // relación real
       orderBy: { id: "asc" },
+    });
+
+    const areas = areasRaw.map((a) => {
+      const { Table, ...rest } = a;
+      return { ...rest, tables: Table };
     });
 
     res.json(areas);
@@ -29,11 +34,10 @@ router.get("/", async (req, res) => {
 
 /**
  * POST /api/areas
- * Crea un área nueva
  */
 router.post("/", async (req, res) => {
   try {
-    const tenantId = req.tenantId; // ✅ TENANT
+    const tenantId = req.tenantId;
     const { name, description } = req.body;
 
     if (!name) {
@@ -44,7 +48,8 @@ router.post("/", async (req, res) => {
       data: {
         name: name.trim(),
         description: description?.trim() || "",
-        tenantId, // ✅ TENANT
+        tenantId,
+        updatedAt: new Date(), // ✅ por si tu schema lo exige
       },
     });
 
@@ -57,11 +62,10 @@ router.post("/", async (req, res) => {
 
 /**
  * PUT /api/areas/:id
- * Actualiza nombre y/o descripción de un área
  */
 router.put("/:id", async (req, res) => {
   try {
-    const tenantId = req.tenantId; // ✅ TENANT
+    const tenantId = req.tenantId;
     const id = Number(req.params.id);
     const { name, description } = req.body;
 
@@ -77,12 +81,11 @@ router.put("/:id", async (req, res) => {
 
     const dataToUpdate = {};
     if (name) dataToUpdate.name = name;
-    if (typeof description !== "undefined") {
-      dataToUpdate.description = description;
-    }
+    if (typeof description !== "undefined") dataToUpdate.description = description;
+    dataToUpdate.updatedAt = new Date(); // ✅
 
     const updated = await prisma.area.updateMany({
-      where: { id, tenantId }, // ✅ TENANT
+      where: { id, tenantId },
       data: dataToUpdate,
     });
 
@@ -90,12 +93,15 @@ router.put("/:id", async (req, res) => {
       return res.status(404).json({ error: "Área no encontrada" });
     }
 
-    const area = await prisma.area.findFirst({
+    const areaRaw = await prisma.area.findFirst({
       where: { id, tenantId },
-      include: {
-        Table: true, // ✅ FIX PRISMA (antes: tables)
-      },
+      include: { Table: true },
     });
+
+    if (!areaRaw) return res.status(404).json({ error: "Área no encontrada" });
+
+    const { Table, ...rest } = areaRaw;
+    const area = { ...rest, tables: Table };
 
     res.json(area);
   } catch (err) {
@@ -106,33 +112,52 @@ router.put("/:id", async (req, res) => {
 
 /**
  * DELETE /api/areas/:id
- * Elimina un área y sus mesas
+ * ❌ No permite borrar si existen pedidos asociados
  */
 router.delete("/:id", async (req, res) => {
   try {
-    const tenantId = req.tenantId; // ✅ TENANT
+    const tenantId = req.tenantId || 1; // local safe
     const id = Number(req.params.id);
 
     if (!Number.isFinite(id)) {
       return res.status(400).json({ error: "ID de área inválido" });
     }
 
+    // 1️⃣ Traer mesas del área
+    const tables = await prisma.table.findMany({
+      where: { areaId: id, tenantId },
+      select: { id: true },
+    });
+
+    const tableIds = tables.map((t) => t.id);
+
+    // 2️⃣ Verificar si hay pedidos ligados a esas mesas
+    if (tableIds.length > 0) {
+      const ordersCount = await prisma.order.count({
+        where: {
+          tenantId,
+          tableId: { in: tableIds },
+        },
+      });
+
+      if (ordersCount > 0) {
+        return res.status(400).json({
+          error: "No se puede eliminar el área porque tiene pedidos asociados",
+        });
+      }
+    }
+
+    // 3️⃣ Si NO hay pedidos → borrar mesas y área
     await prisma.$transaction([
       prisma.table.deleteMany({
-        where: {
-          areaId: id,
-          tenantId, // ✅ TENANT
-        },
+        where: { areaId: id, tenantId },
       }),
       prisma.area.deleteMany({
-        where: {
-          id,
-          tenantId, // ✅ TENANT
-        },
+        where: { id, tenantId },
       }),
     ]);
 
-    res.json({
+    return res.json({
       message: "Área y sus mesas eliminadas correctamente",
     });
   } catch (err) {
@@ -140,5 +165,6 @@ router.delete("/:id", async (req, res) => {
     res.status(500).json({ error: "Error al eliminar área" });
   }
 });
+
 
 module.exports = router;
