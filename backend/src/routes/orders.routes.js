@@ -21,26 +21,28 @@ async function resolveTenant(req) {
     .trim()
     .toLowerCase();
 
-const tenant = await prisma.tenant.upsert({
-  where: { key },
-  update: {},
-  create: {
-    key,
-    name: key,
-    updatedAt: new Date(), // ✅ FIX CRÍTICO
-  },
-  select: {
-    id: true,
-    key: true,
-    name: true,
-  },
-});
+  const key = tenantKey; // ✅ FIX CRÍTICO (esto faltaba)
 
-req.tenant = tenant;
-req.tenantId = tenant.id; // ✅ FIX
-return tenant;
+  const tenant = await prisma.tenant.upsert({
+    where: { key },
+    update: {},
+    create: {
+      key,
+      name: key,
+      updatedAt: new Date(), // ya estaba bien
+    },
+    select: {
+      id: true,
+      key: true,
+      name: true,
+    },
+  });
 
+  req.tenant = tenant;
+  req.tenantId = tenant.id;
+  return tenant;
 }
+
 
 // aplica tenant a TODO este router (mínimo, sin tocar endpoints)
 router.use(async (req, res, next) => {
