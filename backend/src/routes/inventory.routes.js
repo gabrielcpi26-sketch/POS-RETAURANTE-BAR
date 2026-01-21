@@ -84,13 +84,14 @@ router.post("/create", async (req, res) => {
       return res.status(400).json({ error: "Nombre requerido" });
     }
 
-    const item = await prisma.inventoryItem.create({
-      data: {
-        name: name.trim(),
-        currentStock: 0,
-        tenantId,
-      },
-    });
+   const item = await prisma.inventoryItem.create({
+  data: {
+    name,
+    currentStock: 0,
+    tenantId,
+    updatedAt: new Date(), // ✅ FIX CRÍTICO
+  }
+});
 
     return res.json(withStockAlias(item));
   } catch (error) {
