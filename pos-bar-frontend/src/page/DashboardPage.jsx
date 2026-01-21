@@ -246,9 +246,10 @@ const fmtMoney = (n) =>
 
 function printTicket(order) {
   if (!window.qz) {
-    alert("❌ QZ Tray no detectado");
-    return;
-  }
+  console.warn("QZ Tray no disponible, se omite impresión");
+  return;
+}
+
 
   const printer = localStorage.getItem("pos_selected_printer");
   if (!printer) {
@@ -452,6 +453,7 @@ useEffect(() => {
 
   qz.websocket.connect().catch(() => {});
 }, []);
+
 
 
   // =======================
@@ -3466,6 +3468,7 @@ appName="POS"
       }
     );
 
+
 const printTicketForTenant = async (ticketText) => {
   if (!window.qz) {
     alert("QZ Tray no disponible en esta tablet");
@@ -3489,8 +3492,6 @@ const printTicketForTenant = async (ticketText) => {
     // 🖨️ Imprimir ticket (si existe printTicket / QZ listo)
     try {
       const currentOrder = ordersByTable[selectedTable.id] || { items: [] };
-
-
 
       // ✅ IMPORTANTE: aquí llama TU función real de impresión
       // (la que ya usas en "Imprimir prueba" / QZ Tray)
@@ -3545,8 +3546,6 @@ const printTicketForTenant = async (ticketText) => {
     </div>
   </div>
 )}
-
-
 
 
 {/* ===== MODAL CAJA (admin) ===== */}
