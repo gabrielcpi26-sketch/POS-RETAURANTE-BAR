@@ -1,6 +1,11 @@
 // src/utils/qzPrint.js
 import qz from "qz-tray";
 
+// Exponer qz en window para compatibilidad con el resto del código (NO refactor)
+if (typeof window !== "undefined" && !window.qz) {
+  window.qz = qz;
+}
+
 // ✅ 1) Conectar a QZ Tray (debe estar corriendo en la PC)
 export async function qzConnect() {
   if (qz.websocket.isActive()) return;
