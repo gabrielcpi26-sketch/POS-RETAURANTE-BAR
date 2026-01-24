@@ -251,11 +251,16 @@ function printTicket(order) {
 }
 
 
-  const printer = localStorage.getItem("pos_selected_printer");
-  if (!printer) {
-    alert("❌ No hay impresora seleccionada");
-    return;
-  }
+const printer =
+  localStorage.getItem("pos_selected_printer") ||
+  localStorage.getItem("pos_printer_name_v1");
+
+if (!printer) {
+  console.warn("❌ No hay impresora seleccionada (se omite impresión)");
+  return;
+}
+
+
 
   const lines = [];
 
