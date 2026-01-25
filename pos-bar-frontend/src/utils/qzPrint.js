@@ -6,45 +6,41 @@ const API_URL =
   window.__VITE_API_URL__ ||
   "https://pos-retaurante-bar.onrender.com";
 
-// Evita re-setear promises y que QZ se rompa por duplicados
-let __qzPromisesReady = false;
-
-// 1) Certificado: QZ lo pide aquí
-async function fetchQzCert() {
-  const res = await fetch(`${API_URL}/api/qz/cert`, { cache: "no-store" });
-  if (!res.ok) throw new Error("No pude obtener el certificado de QZ");
-  return await res.text(); // PEM
+// -------------------------
+// Helpers (NO cambia lógica)
+// -------------------------
+async function httpText(url, options) {
+  const res = await fetch(url, options);
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`HTTP ${res.status} en ${url} :: ${txt}`);
+  }
+  return (await res.text()).trim();
 }
 
-// 2) Firma: QZ manda "toSign" y tu backend regresa la firma
-async function signQz(toSign) {
-  const res = await fetch(`${API_URL}/api/qz/sign`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ request: toSign }),
-  });
-
-  if (!res.ok) throw new Error("No pude firmar con el backend (QZ)");
-  return await res.text(); // firma (string)
-}
-
+// -------------------------
+// QZ Init
+// -------------------------
 export async function qzInit() {
   if (!window.qz) return false;
 
-  // ✅ Promises correctas: se pasan FUNCIONES, no Promises
-  if (!__qzPromisesReady) {
-    qz.security.setCertificatePromise(() => {
-      return fetchQzCert().then((t) => String(t || "").trim());
+  // MUY IMPORTANTE:
+  // setCertificatePromise y setSignaturePromise deben recibir una FUNCIÓN
+  // que REGRESE un Promise (no un Promise directo, no llaves sin return)
+  qz.security.setCertificatePromise(() => {
+    return httpText(`${API_URL}/api/qz/cert`, { cache: "no-store" });
+  });
+
+  qz.security.setSignaturePromise((toSign) => {
+    return httpText(`${API_URL}/api/qz/sign`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+      body: JSON.stringify({ request: toSign }),
     });
+  });
 
-    qz.security.setSignaturePromise((toSign) => {
-      return signQz(toSign).then((sig) => String(sig || "").trim());
-    });
-
-    __qzPromisesReady = true;
-  }
-
-  // conectar websocket si no está
+  // Conectar websocket si no está
   if (!qz.websocket.isActive()) {
     await qz.websocket.connect();
   }
@@ -65,7 +61,6 @@ export async function qzPrintEscpos(printerName, lines) {
 
   const config = qz.configs.create(printerName, {
     encoding: "CP437",
-    // NO tocamos nada más por ahora
   });
 
   const data = []
