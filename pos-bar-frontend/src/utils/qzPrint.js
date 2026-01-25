@@ -29,6 +29,11 @@ async function signQz(toSign) {
   return await res.text(); // firma (string)
 }
 
+const API_URL =
+  import.meta.env.VITE_API_URL ||
+  window.__VITE_API_URL__ ||
+  "https://pos-retaurante-bar.onrender.com";
+
 export async function qzInit() {
   if (!window.qz) return false;
 
