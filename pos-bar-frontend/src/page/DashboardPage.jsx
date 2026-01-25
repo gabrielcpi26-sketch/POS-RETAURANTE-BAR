@@ -9,6 +9,8 @@ import { Bar, Pie } from "react-chartjs-2";
 import ChartDataLabels from "chartjs-plugin-datalabels";
 import TableQRCode from "../components/TableQRCode.jsx";
 import { qzListPrinters, qzPrintEscpos } from "../utils/qzPrint";
+import { printViaBackend } from "../utils/qzPrint";
+
 
 
 
@@ -7530,31 +7532,7 @@ const isCancelled =
       ))}
     </select>
 
-    <button
-      type="button"
-      onClick={async () => {
-        if (!printerName) return alert("Selecciona impresora primero");
-        await qzPrintEscpos(printerName, [
-          "POS MULTI BAR",
-          "--------------------------",
-          "Ticket de prueba",
-          `Fecha: ${new Date().toLocaleString("es-MX")}`,
-          "Gracias :)",
-        ]);
-      }}
-      style={{
-        padding: "8px 12px",
-        borderRadius: 999,
-        border: "1px solid rgba(34,197,94,0.55)",
-        background: "rgba(34,197,94,0.18)",
-        color: "#e5e7eb",
-        fontSize: 11,
-        fontWeight: 900,
-        cursor: "pointer",
-      }}
-    >
-      Imprimir prueba
-    </button>
+
   </>
 )}
 

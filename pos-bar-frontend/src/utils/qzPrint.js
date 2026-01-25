@@ -43,3 +43,29 @@ export async function qzPrintEscpos(printerName, lines = []) {
 
   await qz.print(config, data);
 }
+
+
+export async function printViaBackend({ printer, lines }) {
+  const res = await fetch(
+    `${import.meta.env.VITE_API_URL}/qz/print`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-tenant-key": localStorage.getItem("tenant_key") || "default",
+      },
+      body: JSON.stringify({
+        printer,
+        lines,
+      }),
+    }
+  );
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data?.error || "Error al imprimir");
+  }
+
+  return data;
+}
+
