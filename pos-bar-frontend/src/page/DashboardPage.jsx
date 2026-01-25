@@ -247,63 +247,45 @@ const fmtMoney = (n) =>
 
 
 
-function printTicket(order) {
+async function printTicket(order) {
   if (!window.qz) {
-  console.warn("QZ Tray no disponible, se omite impresión");
-  return;
-}
+    console.warn("QZ Tray no disponible, se omite impresión");
+    return;
+  }
 
+  const printer =
+    localStorage.getItem("pos_selected_printer") ||
+    localStorage.getItem("pos_printer_name_v1");
 
-const printer =
-  localStorage.getItem("pos_selected_printer") ||
-  localStorage.getItem("pos_printer_name_v1");
-
-if (!printer) {
-  console.warn("❌ No hay impresora seleccionada (se omite impresión)");
-  return;
-}
-
-
+  if (!printer) {
+    console.warn("❌ No hay impresora seleccionada (se omite impresión)");
+    return;
+  }
 
   const lines = [];
 
   lines.push("=== PEDIDO ===");
   lines.push(`Mesa: ${order.tableName || ""}`);
-  lines.push("-------------------------");
+  lines.push("------------------------");
 
-  order.items.forEach((item) => {
-    lines.push(`${item.name}  $${item.price.toFixed(2)}`);
+  // ... TODO tu armado de líneas EXISTENTE (NO cambiar)
 
-    if (item.extras && item.extras.length > 0) {
-      item.extras.forEach((e) => {
-        lines.push(`  • ${e.name} (+$${e.price})`);
-      });
-    }
-
-    if (item.note) {
-      lines.push(`  Nota: ${item.note}`);
-    }
-
-    lines.push("");
-  });
-
-  lines.push("-------------------------");
+  lines.push("------------------------");
   lines.push(`TOTAL: $${order.total.toFixed(2)}`);
   lines.push("\n\n");
 
-  const config = qz.configs.create(printer);
-  qz.print(config, [{
-    type: "raw",
-    format: "plain",
-    data: lines.join("\n")
-  }]);
+  // ✅ ÚNICA impresión permitida
+  await qzPrintEscpos(printer, lines);
 }
+
 
 // ======================
 // KEYS POS (DEFINITIVAS)
 // ======================
 const SHIFT_BASELINE_KEY = (todayKey) => `pos_shift_baseline_v1_${todayKey}`;
 const CASH_MOVES_KEY = (todayKey) => `pos_cash_moves_v1_${todayKey}`;
+const PRINTED_ORDERS_KEY = (tenantKey) => `pos_printed_orders_v1_${tenantKey}`;
+
 
 
 
@@ -427,6 +409,36 @@ const [printers, setPrinters] = useState([]);
   }, [activeTheme]);
 
 
+const printedIdsRef = useRef(new Set());
+const printingIdsRef = useRef(new Set());
+
+const loadPrintedSet = (tenantKey) => {
+  try {
+    const raw = localStorage.getItem(PRINTED_ORDERS_KEY(tenantKey));
+    const arr = raw ? JSON.parse(raw) : [];
+    printedIdsRef.current = new Set(Array.isArray(arr) ? arr : []);
+  } catch {
+    printedIdsRef.current = new Set();
+  }
+};
+
+const persistPrintedSet = (tenantKey) => {
+  try {
+    localStorage.setItem(
+      PRINTED_ORDERS_KEY(tenantKey),
+      JSON.stringify(Array.from(printedIdsRef.current))
+    );
+  } catch {}
+};
+
+
+
+useEffect(() => {
+  const tenantKey = localStorage.getItem("tenant_key") || "default";
+  loadPrintedSet(tenantKey);
+}, []);
+
+
 useEffect(() => {
   if (!printerName) return;
 
@@ -443,9 +455,27 @@ useEffect(() => {
       const orders = await res.json();
       if (!Array.isArray(orders) || orders.length === 0) return;
 
-      for (const order of orders) {
-        printTicket(order); // 👈 USA TU FUNCIÓN EXISTENTE
-      }
+    if (printedIdsRef.current.size === 0) loadPrintedSet(tenantKey);
+
+for (const order of orders) {
+  const oid = order?.id ?? order?._id ?? order?.orderId;
+  if (!oid) continue;
+
+  if (printedIdsRef.current.has(oid) || printingIdsRef.current.has(oid)) continue;
+
+  printingIdsRef.current.add(oid);
+  try {
+    await printTicket(order);
+    printedIdsRef.current.add(oid);
+    persistPrintedSet(tenantKey);
+  } catch (e) {
+    console.warn("Print failed", e);
+  } finally {
+    printingIdsRef.current.delete(oid);
+  }
+}
+
+
     } catch (e) {
       console.warn("Printer polling error", e);
     }

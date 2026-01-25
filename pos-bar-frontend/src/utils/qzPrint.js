@@ -20,7 +20,8 @@ async function signQz(toSign) {
   const res = await fetch(`${BASE_URL}/qz/sign`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ toSign }),
+    body: JSON.stringify({ request: toSign }),
+
   });
   if (!res.ok) throw new Error("No pude firmar con el backend (QZ)");
   return await res.text(); // firma (string)
