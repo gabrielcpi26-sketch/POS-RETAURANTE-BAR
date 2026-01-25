@@ -5,6 +5,8 @@ const express = require("express");
 const cors = require("cors");
 const { PrismaClient } = require("@prisma/client");
 const prisma = require("./prisma");
+const qzRoutes = require("./routes/qz.routes");
+
 
 
 console.log(
@@ -222,6 +224,8 @@ app.use("/api/menu-recipes", menuRecipesRoutes);
 app.use("/api/quick-products", quickProductsRoutes.default || quickProductsRoutes);
 app.use("/api/onboarding", onboardingRoutes);
 app.use("/api/tenant-config", tenantConfigRoutes);
+app.use("/qz", qzRoutes);
+
 
 // Puerto
 const PORT = process.env.PORT || 4000;
