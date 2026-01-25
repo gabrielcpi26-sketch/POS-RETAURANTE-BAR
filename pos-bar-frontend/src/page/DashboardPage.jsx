@@ -9,7 +9,8 @@ import { Bar, Pie } from "react-chartjs-2";
 import ChartDataLabels from "chartjs-plugin-datalabels";
 import TableQRCode from "../components/TableQRCode.jsx";
 import { qzListPrinters, qzPrintEscpos } from "../utils/qzPrint";
-import { printViaBackend } from "../utils/qzPrint";
+
+
 
 
 

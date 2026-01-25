@@ -1,71 +1,67 @@
-// src/utils/qzPrint.js
-import qz from "qz-tray";
+/// src/utils/qzPrint.js
+/* global qz, API_URL */
 
-// Exponer qz en window para compatibilidad con el resto del código (NO refactor)
-if (typeof window !== "undefined" && !window.qz) {
-  window.qz = qz;
+function getBaseUrl() {
+  // respeta tu forma actual de usar backend (Dashboard usa API_URL / VITE_API_URL)
+  return (import.meta?.env?.VITE_API_URL) || (typeof API_URL !== "undefined" && API_URL ? API_URL : "");
 }
 
-// ✅ 1) Conectar a QZ Tray (debe estar corriendo en la PC)
-export async function qzConnect() {
-  if (qz.websocket.isActive()) return;
-
-  // Modo DEV rápido: aceptar certificado demo (para pruebas).
-  // Para producción "silencioso", luego metemos firma/cert (QZ signing).
-  qz.security.setCertificatePromise((resolve) => resolve("")); // dev only
-  qz.security.setSignaturePromise((toSign) => (resolve) => resolve("")); // dev only
-
-  await qz.websocket.connect();
+// 1) Certificado: QZ lo pide aquí
+async function fetchQzCert() {
+  const BASE_URL = getBaseUrl();
+  const res = await fetch(`${BASE_URL}/qz/cert`, { cache: "no-store" });
+  if (!res.ok) throw new Error("No pude obtener el certificado de QZ");
+  return await res.text(); // PEM
 }
 
-// ✅ 2) Listar impresoras instaladas
+// 2) Firma: QZ manda "toSign" y tu backend regresa la firma
+async function signQz(toSign) {
+  const BASE_URL = getBaseUrl();
+  const res = await fetch(`${BASE_URL}/qz/sign`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ toSign }),
+  });
+  if (!res.ok) throw new Error("No pude firmar con el backend (QZ)");
+  return await res.text(); // firma (string)
+}
+
+export async function qzInit() {
+  if (!window.qz) return false;
+
+  // ✅ ESTO es lo que te falta (cert + signature reales)
+  qz.security.setCertificatePromise(() => fetchQzCert());
+  qz.security.setSignaturePromise((toSign) => signQz(toSign));
+
+  // conectar websocket si no está
+  if (!qz.websocket.isActive()) {
+    await qz.websocket.connect();
+  }
+
+  return true;
+}
+
 export async function qzListPrinters() {
-  await qzConnect();
+  if (!window.qz) return [];
+  await qzInit();
   return await qz.printers.find();
 }
 
-// ✅ 3) Imprimir ticket ESC/POS raw
-export async function qzPrintEscpos(printerName, lines = []) {
-  await qzConnect();
+export async function qzPrintEscpos(printerName, lines) {
+  if (!window.qz) return false;
 
-  const config = qz.configs.create(printerName);
+  await qzInit();
 
-  // ESC/POS básico (inicializa + texto + corte)
-  // Nota: Cada impresora puede variar, pero esto es el “baseline” típico.
-  const ESC = "\x1B";
-  const GS = "\x1D";
-  const init = ESC + "@";
-  const cut = GS + "V" + "\x00";
+  const config = qz.configs.create(printerName, {
+    encoding: "CP437",
+    // si tu impresora ocupa otro, lo cambias después. Por ahora NO tocamos.
+  });
 
-  const text = [init, ...lines, "\n\n", cut].join("\n");
-
-  const data = [{ type: "raw", format: "plain", data: text }];
+  const data = []
+    .concat(lines.map((l) => ({ type: "raw", format: "plain", data: String(l) + "\n" })))
+    .concat([{ type: "raw", format: "plain", data: "\n\n\n" }]);
 
   await qz.print(config, data);
-}
-
-
-export async function printViaBackend({ printer, lines }) {
-  const res = await fetch(
-    `${import.meta.env.VITE_API_URL}/qz/print`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-tenant-key": localStorage.getItem("tenant_key") || "default",
-      },
-      body: JSON.stringify({
-        printer,
-        lines,
-      }),
-    }
-  );
-
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data?.error || "Error al imprimir");
-  }
-
-  return data;
+  return true;
 }
 
