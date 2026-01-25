@@ -1,53 +1,50 @@
 /// src/utils/qzPrint.js
 /* global qz */
 
-function getBaseUrl() {
-  // 1) Vite (PROD/DEV)
-  const vite = (import.meta && import.meta.env && import.meta.env.VITE_API_URL) ? import.meta.env.VITE_API_URL : "";
-
-  // 2) fallback opcional si tú lo usas
-  const win = (typeof window !== "undefined" && window.__VITE_API_URL__) ? window.__VITE_API_URL__ : "";
-
-  // 3) último fallback (tu render)
-  const hard = "https://pos-retaurante-bar.onrender.com";
-
-  return (vite || win || hard).replace(/\/$/, "");
+function normalizeBaseUrl(url) {
+  if (!url) return "";
+  return String(url).replace(/\/+$/, ""); // quita "/" al final
 }
 
-// 1) Certificado (PEM)
-async function fetchQzCert() {
-  const BASE = getBaseUrl();
-  const res = await fetch(`${BASE}/api/qz/cert`, { cache: "no-store" });
-  if (!res.ok) throw new Error("No pude obtener el certificado de QZ");
-  const txt = await res.text();
-  return (txt || "").trim();
+// ✅ UNA sola fuente de verdad para el backend
+const QZ_API_BASE = normalizeBaseUrl(
+  import.meta.env.VITE_API_URL ||
+    window.__VITE_API_URL__ ||
+    "https://pos-retaurante-bar.onrender.com"
+);
+
+// ====== helpers ======
+async function fetchQzCertText() {
+  const res = await fetch(`${QZ_API_BASE}/api/qz/cert`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`QZ CERT HTTP ${res.status}`);
+  return (await res.text()).trim();
 }
 
-// 2) Firma (string base64)
-async function signQz(toSign) {
-  const BASE = getBaseUrl();
-  const res = await fetch(`${BASE}/api/qz/sign`, {
+async function fetchQzSignText(toSign) {
+  const res = await fetch(`${QZ_API_BASE}/api/qz/sign`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ request: toSign }),
+    // ✅ QZ manda un string grande; nosotros lo enviamos tal cual
+    body: JSON.stringify({ request: String(toSign) }),
   });
-  if (!res.ok) throw new Error("No pude firmar con el backend (QZ)");
-  const txt = await res.text();
 
-  // 🔥 CLAVE: QZ no tolera saltos de línea/espacios raros en la firma
-  return (txt || "").replace(/\r?\n/g, "").trim();
+  if (!res.ok) throw new Error(`QZ SIGN HTTP ${res.status}`);
+  return (await res.text()).trim();
 }
 
-let __securityReady = false;
+// ====== init ======
+let _securityReady = false;
 
 export async function qzInit() {
   if (!window.qz) return false;
 
-  // ✅ CLAVE: setear promises UNA SOLA VEZ (evita estados raros y “Promise resolver …”)
-  if (!__securityReady) {
-    qz.security.setCertificatePromise(() => fetchQzCert());
-    qz.security.setSignaturePromise((toSign) => signQz(toSign));
-    __securityReady = true;
+  // ✅ setear security UNA SOLA VEZ (evita promesas duplicadas y estados raros)
+  if (!_securityReady) {
+    qz.security.setCertificatePromise(() => fetchQzCertText());
+
+    qz.security.setSignaturePromise((toSign) => fetchQzSignText(toSign));
+
+    _securityReady = true;
   }
 
   // conectar websocket si no está
@@ -71,7 +68,7 @@ export async function qzPrintEscpos(printerName, lines) {
 
   const config = qz.configs.create(printerName, {
     encoding: "CP437",
-    // NO tocamos esto ahorita.
+    // no tocamos tu encoding
   });
 
   const data = []
