@@ -3582,14 +3582,28 @@ const printTicketForTenant = async (ticketText) => {
     return;
   }
 
-  const tenant = localStorage.getItem("x-tenant"); // 🔒 tenant actual
-  const printerKey = `printer_${tenant}`;
+  const tenant = localStorage.getItem("x-tenant");
+const printerKey = tenant ? `printer_${tenant}` : null;
 
-  const savedPrinter = localStorage.getItem(printerKey);
-  if (!savedPrinter) {
-    alert("No hay impresora configurada para este restaurante");
-    return;
-  }
+// 1) Primero intenta por tenant
+let savedPrinter = printerKey ? localStorage.getItem(printerKey) : null;
+
+// 2) Fallback: la misma que usa "Imprimir prueba" (muy común)
+if (!savedPrinter) {
+  savedPrinter = localStorage.getItem("printer_selected");
+}
+
+// 2.5) Último fallback: usa la seleccionada en el dropdown (estado actual)
+if (!savedPrinter && printerName) {
+  savedPrinter = printerName;
+}
+
+
+// 3) Si aún no hay, entonces sí avisamos
+if (!savedPrinter) {
+  alert("No hay impresora configurada para este restaurante");
+  return;
+}
 
   const config = qz.configs.create(savedPrinter);
   await qz.print(config, [ticketText]);
@@ -7626,10 +7640,19 @@ const isCancelled =
 
     <select
       value={printerName}
-      onChange={(e) => {
-        setPrinterName(e.target.value);
-        try { localStorage.setItem("pos_printer_name_v1", e.target.value); } catch {}
-      }}
+    onChange={(e) => {
+  const v = e.target.value;
+  setPrinterName(v);
+
+  // ✅ Guardar selección para que "Confirmar pago" pueda imprimir
+  try {
+    localStorage.setItem("printer_selected", v);
+
+    const tenant = localStorage.getItem("x-tenant"); // tu tenant actual
+    if (tenant) localStorage.setItem(`printer_${tenant}`, v);
+  } catch (_) {}
+}}
+
       style={{
         padding: "8px 10px",
         borderRadius: 12,
