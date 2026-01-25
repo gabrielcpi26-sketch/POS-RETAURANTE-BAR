@@ -1,59 +1,51 @@
 /// src/utils/qzPrint.js
-/* global qz, API_URL */
+/* global qz */
 
 function getBaseUrl() {
-  // respeta tu forma actual de usar backend (Dashboard usa API_URL / VITE_API_URL)
-  return (import.meta?.env?.VITE_API_URL) || (typeof API_URL !== "undefined" && API_URL ? API_URL : "");
+  // Respeta tu forma actual: VITE_API_URL / window.__VITE_API_URL__ / global API_URL si existiera
+  // + fallback a tu Render
+  return (
+    (import.meta?.env?.VITE_API_URL) ||
+    (typeof window !== "undefined" && window.__VITE_API_URL__) ||
+    (typeof API_URL !== "undefined" && API_URL ? API_URL : "") ||
+    "https://pos-retaurante-bar.onrender.com"
+  );
 }
+
+const API_URL = getBaseUrl();
 
 // 1) Certificado: QZ lo pide aquí
 async function fetchQzCert() {
-  const BASE_URL = getBaseUrl();
- const res = await fetch(`${BASE_URL}/api/qz/cert`, { cache: "no-store" });
-
+  const res = await fetch(`${API_URL}/api/qz/cert`, { cache: "no-store" });
   if (!res.ok) throw new Error("No pude obtener el certificado de QZ");
-  return await res.text(); // PEM
+  const pem = await res.text();
+  return (pem || "").trim(); // PEM
 }
 
 // 2) Firma: QZ manda "toSign" y tu backend regresa la firma
 async function signQz(toSign) {
-  const BASE_URL = getBaseUrl();
-  const res = await fetch(`${BASE_URL}/api/qz/sign`, {
-
+  const res = await fetch(`${API_URL}/api/qz/sign`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ request: toSign }),
-
   });
   if (!res.ok) throw new Error("No pude firmar con el backend (QZ)");
-  return await res.text(); // firma (string)
+  const sig = await res.text();
+  return (sig || "").trim(); // firma (string)
 }
 
-const API_URL =
-  import.meta.env.VITE_API_URL ||
-  window.__VITE_API_URL__ ||
-  "https://pos-retaurante-bar.onrender.com";
+// Evita reconfigurar security en cada llamada
+let __qzSecurityConfigured = false;
 
 export async function qzInit() {
   if (!window.qz) return false;
 
-  // ✅ ESTO es lo que te falta (cert + signature reales)
- qz.security.setCertificatePromise(() =>
-  fetch(`${API_URL}/api/qz/cert`)
-    .then(r => r.text())
-    .then(t => t.trim())
-);
-
-qz.security.setSignaturePromise(toSign =>
-  fetch(`${API_URL}/api/qz/sign`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ request: toSign }) // o { toSign } (da igual, tu backend soporta ambos)
-  })
-    .then(r => r.text())
-    .then(sig => sig.trim())
-);
-
+  // ✅ IMPORTANTE: QZ quiere FUNCIONES que regresen Promises (NO Promises directas)
+  if (!__qzSecurityConfigured) {
+    qz.security.setCertificatePromise(() => fetchQzCert());
+    qz.security.setSignaturePromise((toSign) => signQz(toSign));
+    __qzSecurityConfigured = true;
+  }
 
   // conectar websocket si no está
   if (!qz.websocket.isActive()) {
@@ -76,14 +68,19 @@ export async function qzPrintEscpos(printerName, lines) {
 
   const config = qz.configs.create(printerName, {
     encoding: "CP437",
-    // si tu impresora ocupa otro, lo cambias después. Por ahora NO tocamos.
+    // NO tocamos más.
   });
 
   const data = []
-    .concat(lines.map((l) => ({ type: "raw", format: "plain", data: String(l) + "\n" })))
+    .concat(
+      (lines || []).map((l) => ({
+        type: "raw",
+        format: "plain",
+        data: String(l) + "\n",
+      }))
+    )
     .concat([{ type: "raw", format: "plain", data: "\n\n\n" }]);
 
   await qz.print(config, data);
   return true;
 }
-
