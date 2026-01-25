@@ -3530,6 +3530,51 @@ appName="POS"
       }
     );
 
+// ==============================
+// Ticket: arma texto y manda a QZ
+// ==============================
+const buildTicketText = ({ table, items, paymentMethod, paymentRef, total }) => {
+  const mesa = table?.name || table?.numero || table?.id || "Mesa";
+  const fecha = new Date().toLocaleString();
+
+  const lines = [];
+  lines.push("===============");
+  lines.push("   TICKET VENTA");
+  lines.push("===============");
+  lines.push(`Mesa: ${mesa}`);
+  lines.push(`Fecha: ${fecha}`);
+  lines.push("----------------");
+
+  let sum = 0;
+
+  (items || []).forEach((it) => {
+    const nombre = it.nombre || it.name || "Producto";
+    const qty = Number(it.qty ?? it.cantidad ?? 1);
+    const precio = Number(it.precio ?? it.price ?? 0);
+    const sub = qty * precio;
+    sum += sub;
+
+    // Ej: 2 x Taco  $50.00
+    lines.push(`${qty} x ${nombre}`);
+    lines.push(`   $${sub.toFixed(2)}`);
+  });
+
+  lines.push("----------------");
+
+  const finalTotal = Number(total ?? sum);
+  lines.push(`TOTAL: $${finalTotal.toFixed(2)}`);
+
+  if (paymentMethod) lines.push(`PAGO: ${paymentMethod}`);
+  if (paymentRef) lines.push(`REF: ${paymentRef}`);
+
+  lines.push("\n\n"); // feed para que corte en térmica
+  return lines.join("\n");
+};
+
+const printTicket = async ({ table, items, paymentMethod, paymentRef, total }) => {
+  const ticketText = buildTicketText({ table, items, paymentMethod, paymentRef, total });
+  await printTicketForTenant(ticketText);
+};
 
 const printTicketForTenant = async (ticketText) => {
   if (!window.qz) {
