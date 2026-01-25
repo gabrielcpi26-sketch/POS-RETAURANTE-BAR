@@ -1,53 +1,47 @@
 /// src/utils/qzPrint.js
 /* global qz */
 
-function getBaseUrl() {
-  // Respeta tu forma actual: VITE_API_URL / window.__VITE_API_URL__ / global API_URL si existiera
-  // + fallback a tu Render
-  return (
-    (import.meta?.env?.VITE_API_URL) ||
-    (typeof window !== "undefined" && window.__VITE_API_URL__) ||
-    (typeof API_URL !== "undefined" && API_URL ? API_URL : "") ||
-    "https://pos-retaurante-bar.onrender.com"
-  );
-}
+/**
+ * IMPORTANTE:
+ * - QZ Tray NO tiene acceso a import.meta.env
+ * - API_URL DEBE ser un string REAL y GLOBAL
+ * - NO usar helpers dentro de qz.security
+ */
 
-const API_URL = getBaseUrl();
+// ✅ URL ABSOLUTA (PROD)
+const API_URL = "https://pos-retaurante-bar.onrender.com";
 
-// 1) Certificado: QZ lo pide aquí
-async function fetchQzCert() {
-  const res = await fetch(`${API_URL}/api/qz/cert`, { cache: "no-store" });
-  if (!res.ok) throw new Error("No pude obtener el certificado de QZ");
-  const pem = await res.text();
-  return (pem || "").trim(); // PEM
-}
-
-// 2) Firma: QZ manda "toSign" y tu backend regresa la firma
-async function signQz(toSign) {
-  const res = await fetch(`${API_URL}/api/qz/sign`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ request: toSign }),
-  });
-  if (!res.ok) throw new Error("No pude firmar con el backend (QZ)");
-  const sig = await res.text();
-  return (sig || "").trim(); // firma (string)
-}
-
-// Evita reconfigurar security en cada llamada
-let __qzSecurityConfigured = false;
-
+// ================================
+// INIT QZ
+// ================================
 export async function qzInit() {
   if (!window.qz) return false;
 
-  // ✅ IMPORTANTE: QZ quiere FUNCIONES que regresen Promises (NO Promises directas)
-  if (!__qzSecurityConfigured) {
-    qz.security.setCertificatePromise(() => fetchQzCert());
-    qz.security.setSignaturePromise((toSign) => signQz(toSign));
-    __qzSecurityConfigured = true;
-  }
+  // ===== CERTIFICADO =====
+  qz.security.setCertificatePromise(function () {
+    return fetch(`${API_URL}/api/qz/cert`, { cache: "no-store" })
+      .then(res => {
+        if (!res.ok) throw new Error("QZ cert fetch failed");
+        return res.text();
+      })
+      .then(cert => cert.trim());
+  });
 
-  // conectar websocket si no está
+  // ===== FIRMA =====
+  qz.security.setSignaturePromise(function (toSign) {
+    return fetch(`${API_URL}/api/qz/sign`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request: toSign })
+    })
+      .then(res => {
+        if (!res.ok) throw new Error("QZ sign failed");
+        return res.text();
+      })
+      .then(signature => signature.trim());
+  });
+
+  // ===== WEBSOCKET =====
   if (!qz.websocket.isActive()) {
     await qz.websocket.connect();
   }
@@ -55,28 +49,33 @@ export async function qzInit() {
   return true;
 }
 
+// ================================
+// LISTAR IMPRESORAS
+// ================================
 export async function qzListPrinters() {
   if (!window.qz) return [];
   await qzInit();
   return await qz.printers.find();
 }
 
+// ================================
+// IMPRIMIR TICKET (ESC/POS)
+// ================================
 export async function qzPrintEscpos(printerName, lines) {
   if (!window.qz) return false;
 
   await qzInit();
 
   const config = qz.configs.create(printerName, {
-    encoding: "CP437",
-    // NO tocamos más.
+    encoding: "CP437"
   });
 
   const data = []
     .concat(
-      (lines || []).map((l) => ({
+      lines.map(line => ({
         type: "raw",
         format: "plain",
-        data: String(l) + "\n",
+        data: String(line) + "\n"
       }))
     )
     .concat([{ type: "raw", format: "plain", data: "\n\n\n" }]);
