@@ -1,46 +1,56 @@
 /// src/utils/qzPrint.js
 /* global qz */
 
-const API_URL =
-  import.meta.env.VITE_API_URL ||
-  window.__VITE_API_URL__ ||
-  "https://pos-retaurante-bar.onrender.com";
+function getBaseUrl() {
+  // 1) Vite (PROD/DEV)
+  const vite = (import.meta && import.meta.env && import.meta.env.VITE_API_URL) ? import.meta.env.VITE_API_URL : "";
 
-// -------------------------
-// Helpers (NO cambia lógica)
-// -------------------------
-async function httpText(url, options) {
-  const res = await fetch(url, options);
-  if (!res.ok) {
-    const txt = await res.text().catch(() => "");
-    throw new Error(`HTTP ${res.status} en ${url} :: ${txt}`);
-  }
-  return (await res.text()).trim();
+  // 2) fallback opcional si tú lo usas
+  const win = (typeof window !== "undefined" && window.__VITE_API_URL__) ? window.__VITE_API_URL__ : "";
+
+  // 3) último fallback (tu render)
+  const hard = "https://pos-retaurante-bar.onrender.com";
+
+  return (vite || win || hard).replace(/\/$/, "");
 }
 
-// -------------------------
-// QZ Init
-// -------------------------
+// 1) Certificado (PEM)
+async function fetchQzCert() {
+  const BASE = getBaseUrl();
+  const res = await fetch(`${BASE}/api/qz/cert`, { cache: "no-store" });
+  if (!res.ok) throw new Error("No pude obtener el certificado de QZ");
+  const txt = await res.text();
+  return (txt || "").trim();
+}
+
+// 2) Firma (string base64)
+async function signQz(toSign) {
+  const BASE = getBaseUrl();
+  const res = await fetch(`${BASE}/api/qz/sign`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ request: toSign }),
+  });
+  if (!res.ok) throw new Error("No pude firmar con el backend (QZ)");
+  const txt = await res.text();
+
+  // 🔥 CLAVE: QZ no tolera saltos de línea/espacios raros en la firma
+  return (txt || "").replace(/\r?\n/g, "").trim();
+}
+
+let __securityReady = false;
+
 export async function qzInit() {
   if (!window.qz) return false;
 
-  // MUY IMPORTANTE:
-  // setCertificatePromise y setSignaturePromise deben recibir una FUNCIÓN
-  // que REGRESE un Promise (no un Promise directo, no llaves sin return)
-  qz.security.setCertificatePromise(() => {
-    return httpText(`${API_URL}/api/qz/cert`, { cache: "no-store" });
-  });
+  // ✅ CLAVE: setear promises UNA SOLA VEZ (evita estados raros y “Promise resolver …”)
+  if (!__securityReady) {
+    qz.security.setCertificatePromise(() => fetchQzCert());
+    qz.security.setSignaturePromise((toSign) => signQz(toSign));
+    __securityReady = true;
+  }
 
-  qz.security.setSignaturePromise((toSign) => {
-    return httpText(`${API_URL}/api/qz/sign`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      cache: "no-store",
-      body: JSON.stringify({ request: toSign }),
-    });
-  });
-
-  // Conectar websocket si no está
+  // conectar websocket si no está
   if (!qz.websocket.isActive()) {
     await qz.websocket.connect();
   }
@@ -61,6 +71,7 @@ export async function qzPrintEscpos(printerName, lines) {
 
   const config = qz.configs.create(printerName, {
     encoding: "CP437",
+    // NO tocamos esto ahorita.
   });
 
   const data = []
