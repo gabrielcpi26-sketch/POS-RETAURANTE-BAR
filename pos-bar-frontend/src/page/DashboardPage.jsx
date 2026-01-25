@@ -440,9 +440,33 @@ useEffect(() => {
 
 
 useEffect(() => {
-  if (!printerName) return;
+  const selectedPrinter =
+  localStorage.getItem("pos_selected_printer") ||
+  localStorage.getItem("pos_printer_name_v1") ||
+  "";
+
+const isBadPrinter =
+  !selectedPrinter ||
+  selectedPrinter === "Generic / Text Only" ||
+  /pdf/i.test(selectedPrinter);
+
+if (isBadPrinter) return;
+
 
   const interval = setInterval(async () => {
+const selectedPrinterNow =
+  localStorage.getItem("pos_selected_printer") ||
+  localStorage.getItem("pos_printer_name_v1") ||
+  "";
+
+if (
+  !selectedPrinterNow ||
+  selectedPrinterNow === "Generic / Text Only" ||
+  /pdf/i.test(selectedPrinterNow)
+) {
+  return;
+}
+
     try {
       const tenantKey = localStorage.getItem("tenant_key") || "default";
 
