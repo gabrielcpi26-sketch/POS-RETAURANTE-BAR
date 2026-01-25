@@ -33,8 +33,22 @@ export async function qzInit() {
   if (!window.qz) return false;
 
   // ✅ ESTO es lo que te falta (cert + signature reales)
-  qz.security.setCertificatePromise(() => fetchQzCert());
-  qz.security.setSignaturePromise((toSign) => signQz(toSign));
+ qz.security.setCertificatePromise(() =>
+  fetch(`${API_URL}/api/qz/cert`)
+    .then(r => r.text())
+    .then(t => t.trim())
+);
+
+qz.security.setSignaturePromise(toSign =>
+  fetch(`${API_URL}/api/qz/sign`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ request: toSign }) // o { toSign } (da igual, tu backend soporta ambos)
+  })
+    .then(r => r.text())
+    .then(sig => sig.trim())
+);
+
 
   // conectar websocket si no está
   if (!qz.websocket.isActive()) {
