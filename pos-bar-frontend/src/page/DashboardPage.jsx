@@ -7456,28 +7456,44 @@ const isCancelled =
                   Cerrar sesión (volver a login)
                 </button>
               </Section>
+
 <Section title="Impresión (QZ Tray)">
   <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
     <button
-      type="button"
-      onClick={async () => {
-        const list = await qzListPrinters();
-        setPrinters(list || []);
-        alert("✅ Impresoras cargadas");
-      }}
-      style={{
-        padding: "8px 12px",
-        borderRadius: 999,
-        border: "1px solid rgba(148,163,184,0.35)",
-        background: "rgba(2,6,23,0.25)",
-        color: "#e5e7eb",
-        fontSize: 11,
-        fontWeight: 900,
-        cursor: "pointer",
-      }}
-    >
-      Detectar impresoras
-    </button>
+  type="button"
+  onClick={async () => {
+    try {
+      console.log("[QZ] click Detectar impresoras. window.qz =", !!window.qz);
+
+      if (!window.qz) {
+        alert("❌ QZ no está cargado en la página (window.qz = false).");
+        return;
+      }
+
+      const list = await qzListPrinters();
+      console.log("[QZ] printers =", list);
+
+      setPrinters(list || []);
+      alert("✅ Impresoras cargadas");
+    } catch (e) {
+      console.error("[QZ] Error Detectar impresoras:", e);
+      alert("❌ Error QZ: " + (e?.message || String(e)));
+    }
+  }}
+  style={{
+    padding: "8px 12px",
+    borderRadius: 999,
+    border: "1px solid rgba(148,163,184,0.35)",
+    background: "rgba(2,6,23,0.25)",
+    color: "#e5e7eb",
+    fontSize: 11,
+    fontWeight: 900,
+    cursor: "pointer",
+  }}
+>
+  Detectar impresoras
+</button>
+
 
     <select
       value={printerName}
