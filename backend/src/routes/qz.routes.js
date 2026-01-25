@@ -47,8 +47,8 @@ router.get("/cert", (req, res) => {
 // ✅ Firma lo que QZ pide
 router.post("/sign", (req, res) => {
   try {
-   const request = req.body?.request ?? req.body?.toSign;
-if (!request) return res.status(400).send("Falta body.request o body.toSign");
+   const request = req.body?.toSign || req.body?.request;
+if (!request) return res.status(400).send("Falta body.toSign");
 
 
     const privateKeyPem = getPrivateKeyPem();

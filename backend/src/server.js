@@ -225,6 +225,7 @@ app.use("/api/quick-products", quickProductsRoutes.default || quickProductsRoute
 app.use("/api/onboarding", onboardingRoutes);
 app.use("/api/tenant-config", tenantConfigRoutes);
 app.use("/qz", qzRoutes);
+app.use("/api/qz", require("./routes/qz.routes"));
 
 
 // Puerto
