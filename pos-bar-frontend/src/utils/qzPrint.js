@@ -9,7 +9,8 @@ function getBaseUrl() {
 // 1) Certificado: QZ lo pide aquí
 async function fetchQzCert() {
   const BASE_URL = getBaseUrl();
-  const res = await fetch(`${BASE_URL}/qz/cert`, { cache: "no-store" });
+ const res = await fetch(`${BASE_URL}/api/qz/cert`, { cache: "no-store" });
+
   if (!res.ok) throw new Error("No pude obtener el certificado de QZ");
   return await res.text(); // PEM
 }
@@ -17,7 +18,8 @@ async function fetchQzCert() {
 // 2) Firma: QZ manda "toSign" y tu backend regresa la firma
 async function signQz(toSign) {
   const BASE_URL = getBaseUrl();
-  const res = await fetch(`${BASE_URL}/qz/sign`, {
+  const res = await fetch(`${BASE_URL}/api/qz/sign`, {
+
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ request: toSign }),
