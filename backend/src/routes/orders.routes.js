@@ -955,6 +955,43 @@ router.post("/close-day", async (req, res) => {
   }
 });
 
+// =======================
+// PRINT STREAM (SSE) por tenant
+// =======================
+const printClientsByTenant = new Map(); // tenantId -> Set(res)
+
+function broadcastPrintJob(tenantId, payload) {
+  const clients = printClientsByTenant.get(tenantId);
+  if (!clients || clients.size === 0) return;
+  const msg = `data: ${JSON.stringify(payload)}\n\n`;
+  for (const res of clients) {
+    try { res.write(msg); } catch {}
+  }
+}
+
+router.get("/print/stream", (req, res) => {
+  const tenantId = req.tenantId;
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders?.();
+
+  if (!printClientsByTenant.has(tenantId)) printClientsByTenant.set(tenantId, new Set());
+  printClientsByTenant.get(tenantId).add(res);
+
+  // ping para que no muera
+  const keep = setInterval(() => {
+    try { res.write(":ping\n\n"); } catch {}
+  }, 25000);
+
+  req.on("close", () => {
+    clearInterval(keep);
+    try { printClientsByTenant.get(tenantId)?.delete(res); } catch {}
+  });
+});
+
+
 // ✅ CERRAR CUENTA (marca como pagadas todas las órdenes abiertas de esa mesa)
 // ✅ AQUI se descuenta inventario REAL (Regla #2)
 router.put("/close-table/:tableId", async (req, res) => {
@@ -1007,8 +1044,32 @@ router.put("/close-table/:tableId", async (req, res) => {
         },
       });
 
+
+
       // Si por alguna razón otro proceso ya las cerró antes de llegar aquí, no descontamos.
       if (upd.count === 0) {
+const device = String(req.headers["x-device"] || "").toLowerCase();
+
+if (device === "mesero") {
+  // payload mínimo para imprimir (tu buildTicketText ya sabe armarlo)
+  const payload = {
+    table: { id: tableId, name: `Mesa ${tableId}` }, // si tú tienes nombre real en DB, aquí puedes consultarlo
+    items: allItems,
+    paymentMethod,
+    paymentRef,
+    total: Number(total.toFixed(2)),
+  };
+
+  await tx.printJob.create({
+    data: {
+      tenantId,
+      type: "close_ticket",
+      payload: JSON.stringify(payload),
+      status: "pending",
+    },
+  });
+}
+
         return { alreadyClosed: true, paidCount: 0, total: 0 };
       }
 
@@ -1018,11 +1079,34 @@ router.put("/close-table/:tableId", async (req, res) => {
         console.log("📦 Inventario descontado al cerrar cuenta (OK)");
       }
 
-      return { alreadyClosed: false, paidCount: openOrders.length, total };
+      // ✅ CAMBIO MINIMO: regresamos items para que la compu imprima lo mismo
+      return { alreadyClosed: false, paidCount: openOrders.length, total, items: allItems };
     });
 
     if (result.alreadyClosed) {
       return res.status(200).json({ message: "No hay cuenta pendiente", paidCount: 0, total: 0 });
+    }
+
+    // ✅ CAMBIO MINIMO: si viene desde MESERO, emitir evento para que la compu imprima
+    const fromDevice = String(req.headers["x-device"] || "").toLowerCase();
+    if (fromDevice === "mesero") {
+      const table = await prisma.table.findFirst({
+        where: { id: tableId, tenantId },
+        select: { id: true, name: true, numero: true },
+      });
+
+      broadcastPrintJob(tenantId, {
+        type: "PRINT_CLOSE_TABLE",
+        table: table || { id: tableId },
+        items: Array.isArray(result.items) ? result.items : [],
+        total: Number(result.total || 0),
+        paymentMethod,
+        paymentRef:
+          String(paymentMethod).toUpperCase() === "TRANSFER"
+            ? String(paymentRef || "")
+            : "",
+        at: new Date().toISOString(),
+      });
     }
 
     return res.json({
@@ -1036,6 +1120,7 @@ router.put("/close-table/:tableId", async (req, res) => {
     return res.status(500).json({ error: "Error al cerrar cuenta" });
   }
 });
+
 
 // =======================
 // PEDIDOS ABIERTOS POR MESA
@@ -1157,5 +1242,48 @@ router.put("/cancel/:orderId", async (req, res) => {
     });
   }
 });
+
+// ✅ Traer tickets pendientes para imprimir (solo compu)
+router.get("/print-jobs", async (req, res) => {
+  try {
+    const tenantId = req.tenantId;
+    const type = String(req.query.type || "");
+    const status = String(req.query.status || "pending");
+
+    const jobs = await prisma.printJob.findMany({
+      where: { tenantId, type, status },
+      orderBy: { id: "asc" },
+      take: 20,
+    });
+
+    res.json(jobs.map(j => ({
+      id: j.id,
+      type: j.type,
+      payload: j.payload,
+    })));
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "print-jobs error" });
+  }
+});
+
+// ✅ Marcar como impreso
+router.post("/print-jobs/:id/printed", async (req, res) => {
+  try {
+    const tenantId = req.tenantId;
+    const id = Number(req.params.id);
+
+    await prisma.printJob.updateMany({
+      where: { id, tenantId },
+      data: { status: "printed", printedAt: new Date() },
+    });
+
+    res.json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "mark printed error" });
+  }
+});
+
 
 module.exports = router;
