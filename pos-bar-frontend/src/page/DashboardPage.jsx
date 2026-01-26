@@ -874,20 +874,44 @@ const MESERO_PIN = String(
 );
 
 
-
+// ===============================
+// Cargar configuración del tenant
+// ===============================
 useEffect(() => {
   async function loadTenantConfig() {
-    const tenantKey = getTenantKeySafe();
-    const res = await fetch(`${API_URL}/api/tenant-config`, {
-      headers: { "x-tenant": tenantKey },
-    });
-    const data = await res.json();
-    setTenantConfig(data);
-console.log("tenantConfig recibido:", data);
+    try {
+      const tenantKey = getTenantKeySafe();
 
+      const res = await fetch(`${API_URL}/api/tenant-config`, {
+        headers: { "x-tenant": tenantKey },
+      });
+
+      if (!res.ok) {
+        console.warn("No se pudo cargar tenant-config");
+        return;
+      }
+
+      const data = await res.json();
+
+      // 🔒 Guardamos en estado (fuente de verdad)
+      setTenantConfig(data);
+
+      // 🧠 Cache local (NO rompe nada existente)
+      localStorage.setItem(
+        "pos_tenant_cfg_v1_default",
+        JSON.stringify(data)
+      );
+
+      // 👀 Debug visible
+      console.log("tenantConfig recibido:", data);
+    } catch (err) {
+      console.error("Error cargando tenant-config:", err);
+    }
   }
+
   loadTenantConfig();
 }, []);
+
 
 
 function verifyMeseroPin() {
@@ -3536,17 +3560,24 @@ appName="POS"
 // Ticket: arma texto y manda a QZ
 // ==============================
 const buildTicketText = ({ table, items, paymentMethod, paymentRef, total, tenantConfig }) => {
-
   const mesa = table?.name || table?.numero || table?.id || "Mesa";
   const fecha = new Date().toLocaleString();
 
   // ===== Datos del restaurante (tenant) =====
+  const tenantKey =
+    localStorage.getItem("x-tenant") ||
+    localStorage.getItem("tenant_key") ||
+    "default";
+
+  // Nombre: primero backend -> luego localStorage (tu caso) -> default
   const negocioNombre =
+    tenantConfig?.businessName ||
     tenantConfig?.nombre ||
     tenantConfig?.restaurantName ||
-    tenantConfig?.title ||
+    localStorage.getItem(`pos_business_name_v1__${tenantKey}`) ||
     "RESTAURANTE";
 
+  // (Opcional: si más adelante tu backend los manda, ya quedan listos)
   const negocioRazon =
     tenantConfig?.razonSocial ||
     tenantConfig?.razon_social ||
@@ -3568,25 +3599,22 @@ const buildTicketText = ({ table, items, paymentMethod, paymentRef, total, tenan
     tenantConfig?.taxId ||
     "";
 
-
   const lines = [];
+  lines.push("====================");
 
+  // Encabezado del negocio
+  lines.push(`${negocioNombre}`);
+  if (negocioRazon) lines.push(`${negocioRazon}`);
+  if (negocioDir) lines.push(`${negocioDir}`);
+  if (negocioTel) lines.push(`TEL: ${negocioTel}`);
+  if (negocioRFC) lines.push(`RFC: ${negocioRFC}`);
 
-lines.push("===============");
-
-// Encabezado del negocio
-lines.push(`${negocioNombre}`);
-if (negocioRazon) lines.push(`${negocioRazon}`);
-if (negocioDir) lines.push(`${negocioDir}`);
-if (negocioTel) lines.push(`TEL: ${negocioTel}`);
-if (negocioRFC) lines.push(`RFC: ${negocioRFC}`);
-
-  lines.push("===============");
+  lines.push("====================");
   lines.push("   TICKET VENTA");
-  lines.push("===============");
+  lines.push("====================");
   lines.push(`Mesa: ${mesa}`);
   lines.push(`Fecha: ${fecha}`);
-  lines.push("----------------");
+  lines.push("--------------------");
 
   let sum = 0;
 
@@ -3597,12 +3625,11 @@ if (negocioRFC) lines.push(`RFC: ${negocioRFC}`);
     const sub = qty * precio;
     sum += sub;
 
-    // Ej: 2 x Taco  $50.00
     lines.push(`${qty} x ${nombre}`);
     lines.push(`   $${sub.toFixed(2)}`);
   });
 
-  lines.push("----------------");
+  lines.push("--------------------");
 
   const finalTotal = Number(total ?? sum);
   lines.push(`TOTAL: $${finalTotal.toFixed(2)}`);
@@ -3614,10 +3641,19 @@ if (negocioRFC) lines.push(`RFC: ${negocioRFC}`);
   return lines.join("\n");
 };
 
-const printTicket = async ({ table, items, paymentMethod, paymentRef, total, tenantConfig }) => {
-  const ticketText = buildTicketText({ table, items, paymentMethod, paymentRef, total, tenantConfig });
+const printTicket = async ({ table, items, paymentMethod, paymentRef, total }) => {
+  const ticketText = buildTicketText({
+    table,
+    items,
+    paymentMethod,
+    paymentRef,
+    total,
+    tenantConfig, // ✅ aquí
+  });
+
   await printTicketForTenant(ticketText);
 };
+
 
 
 const printTicketForTenant = async (ticketText) => {
