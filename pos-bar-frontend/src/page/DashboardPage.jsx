@@ -409,6 +409,9 @@ const [printers, setPrinters] = useState([]);
   }, [activeTheme]);
 
 
+
+
+
 const printedIdsRef = useRef(new Set());
 const printingIdsRef = useRef(new Set());
 
@@ -470,7 +473,9 @@ if (
     try {
       const tenantKey = localStorage.getItem("tenant_key") || "default";
 
-      const res = await fetch(`${API_URL}/api/orders?print=pending`, {
+     
+
+ const res = await fetch(`${API_URL}/api/orders?print=pending`, {
         headers: { "X-Tenant-Key": tenantKey },
       });
 
@@ -497,6 +502,25 @@ for (const order of orders) {
   } finally {
     printingIdsRef.current.delete(oid);
   }
+}
+
+
+// además de tu fetch actual /api/orders?print=pending ...
+const r2 = await fetch(`${API_URL}/api/print-jobs?type=close_ticket&status=pending`, {
+  headers: { "X-Tenant-Key": tenantKey }, // o "x-tenant" como lo uses aquí
+});
+
+const jobs = await r2.json();
+
+for (const j of jobs) {
+  const payload = JSON.parse(j.payload);
+
+  await printTicket(payload); // 👈 usa tu printTicket actual (buildTicketText + QZ)
+
+  await fetch(`${API_URL}/api/print-jobs/${j.id}/printed`, {
+    method: "POST",
+    headers: { "X-Tenant-Key": tenantKey },
+  });
 }
 
 
@@ -3545,6 +3569,8 @@ appName="POS"
         headers: {
           "Content-Type": "application/json",
           "X-Tenant-Key": tenantKey,
+"x-device": "mesero",
+
         },
         body: JSON.stringify({
           paymentMethod: closePaymentMethod,
