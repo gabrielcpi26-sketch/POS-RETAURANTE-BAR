@@ -3569,13 +3569,12 @@ const buildTicketText = ({ table, items, paymentMethod, paymentRef, total, tenan
     localStorage.getItem("tenant_key") ||
     "default";
 
-  // Nombre: primero backend -> luego localStorage (tu caso) -> default
   const negocioNombre =
     tenantConfig?.businessName ||
     tenantConfig?.nombre ||
-    tenantConfig?.restaurantName ||
-    localStorage.getItem(`pos_business_name_v1__${tenantKey}`) ||
+    getBusinessNameFromStorage(tenantKey) ||
     "RESTAURANTE";
+
 
   // (Opcional: si más adelante tu backend los manda, ya quedan listos)
   const negocioRazon =
@@ -3640,6 +3639,30 @@ const buildTicketText = ({ table, items, paymentMethod, paymentRef, total, tenan
   lines.push("\n\n"); // feed para que corte en térmica
   return lines.join("\n");
 };
+
+const getBusinessNameFromStorage = (tenantKey) => {
+  const t = String(tenantKey || "").trim();
+
+  // 1) exacto
+  let v =
+    localStorage.getItem(`pos_business_name_v1__${t}`) ||
+    localStorage.getItem(`pos_business_name_v1_${t}`);
+
+  // 2) fallback: cambia guiones/underscores por si guardaste distinto
+  if (!v && t) {
+    const tDash = t.replace(/_/g, "-");
+    const tUnd = t.replace(/-/g, "_");
+    v =
+      localStorage.getItem(`pos_business_name_v1__${tDash}`) ||
+      localStorage.getItem(`pos_business_name_v1_${tDash}`) ||
+      localStorage.getItem(`pos_business_name_v1__${tUnd}`) ||
+      localStorage.getItem(`pos_business_name_v1_${tUnd}`);
+  }
+
+  return v || "";
+};
+
+
 
 const printTicket = async ({ table, items, paymentMethod, paymentRef, total }) => {
   const ticketText = buildTicketText({
