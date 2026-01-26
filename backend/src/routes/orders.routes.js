@@ -1047,31 +1047,44 @@ router.put("/close-table/:tableId", async (req, res) => {
 
 
       // Si por alguna razón otro proceso ya las cerró antes de llegar aquí, no descontamos.
-      if (upd.count === 0) {
-const device = String(req.headers["x-device"] || "").toLowerCase();
+     
+if (upd.count === 0) {
+        return { alreadyClosed: true, paidCount: 0, total: 0 };
+      }
 
-if (device === "mesero") {
-  // payload mínimo para imprimir (tu buildTicketText ya sabe armarlo)
+// ✅ CAMBIO MINIMO: si viene desde MESERO, encolar impresión SIN romper cierre
+const fromDevice = String(req.headers["x-device"] || "").toLowerCase();
+
+if (fromDevice === "mesero") {
   const payload = {
-    table: { id: tableId, name: `Mesa ${tableId}` }, // si tú tienes nombre real en DB, aquí puedes consultarlo
+    table: { id: tableId, name: `Mesa ${tableId}` }, // ✅ sin DB
     items: allItems,
     paymentMethod,
     paymentRef,
     total: Number(total.toFixed(2)),
   };
 
-  await tx.printJob.create({
-    data: {
-      tenantId,
-      type: "close_ticket",
-      payload: JSON.stringify(payload),
-      status: "pending",
-    },
-  });
+  try {
+    // ⚠️ Si no existe printJob en Prisma/DB, NO debe tumbar el cierre
+    if (tx.printJob && typeof tx.printJob.create === "function") {
+      await tx.printJob.create({
+        data: {
+          tenantId,
+          type: "close_ticket",
+          payload: JSON.stringify(payload),
+          status: "pending",
+        },
+      });
+} else {
+  console.warn("⚠️ printJob no está disponible en Prisma (se omite cola).");
 }
 
-        return { alreadyClosed: true, paidCount: 0, total: 0 };
-      }
+
+  } catch (e) {
+    console.warn("⚠️ No se pudo crear printJob (se omite cola):", e?.message || e);
+  }
+}
+
 
       // 4) ✅ DESCONTAR INVENTARIO REAL (solo aquí)
       if (allItems.length > 0) {
@@ -1087,27 +1100,7 @@ if (device === "mesero") {
       return res.status(200).json({ message: "No hay cuenta pendiente", paidCount: 0, total: 0 });
     }
 
-    // ✅ CAMBIO MINIMO: si viene desde MESERO, emitir evento para que la compu imprima
-    const fromDevice = String(req.headers["x-device"] || "").toLowerCase();
-    if (fromDevice === "mesero") {
-      const table = await prisma.table.findFirst({
-        where: { id: tableId, tenantId },
-        select: { id: true, name: true, numero: true },
-      });
-
-      broadcastPrintJob(tenantId, {
-        type: "PRINT_CLOSE_TABLE",
-        table: table || { id: tableId },
-        items: Array.isArray(result.items) ? result.items : [],
-        total: Number(result.total || 0),
-        paymentMethod,
-        paymentRef:
-          String(paymentMethod).toUpperCase() === "TRANSFER"
-            ? String(paymentRef || "")
-            : "",
-        at: new Date().toISOString(),
-      });
-    }
+ 
 
     return res.json({
       message: "Cuenta cerrada",

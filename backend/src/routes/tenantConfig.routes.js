@@ -11,12 +11,14 @@ router.get("/", async (req, res) => {
       .trim()
       .toLowerCase();
 
-    const rows = await prisma.$queryRaw`
-      select business_name, admin_pin, mesero_pin, direccion, telefono, rfc, razon_social
-      from public.tenant_config
-      where business_name = ${tenantKey}
-      limit 1
-    `;
+ const rows = await prisma.$queryRaw`
+  select business_name, admin_pin, mesero_pin, direccion, telefono, rfc, razon_social
+  from public.tenant_config
+  where business_name = ${tenantKey}
+  limit 1
+`;
+
+
 
     const row = rows && rows[0] ? rows[0] : null;
 

@@ -96,6 +96,7 @@ app.use(
       "Authorization",
       "x-tenant", // ✅ ÚNICO header multi-tenant
       "x-tenant-key", // 👈 AGREGA ESTA
+ "x-device"        // ✅ AGREGAR ESTA (URGENTE)
     ],
   })
 );
@@ -135,22 +136,24 @@ app.use(async (req, _res, next) => {
       select: { id: true },
     });
 
-    // ✅ 2) si NO existe, fallback a tenant_config por business_name (TU CASO)
+     // ✅ 2) si NO existe Tenant por key, crearlo (SIN usar tenant_config porque NO está en Prisma)
     if (!t?.id) {
-      const cfg = await prisma.tenant_config.findFirst({
-        where: { business_name: key },
-        select: { tenant_id: true },
+      t = await prisma.tenant.upsert({
+        where: { key },
+        update: {},
+        create: {
+          key,
+          name: key,
+          updatedAt: new Date(),
+        },
+        select: { id: true },
       });
 
-      if (cfg?.tenant_id) {
-        req.tenantId = Number(cfg.tenant_id); // ✅ seguro
-      } else {
-        // ✅ NO TRUENA: tenant no encontrado
-        req.tenantId = null;
-      }
+      req.tenantId = t?.id ?? null;
     } else {
       req.tenantId = t.id; // (int)
     }
+
 
 
     // ✅ PLAN por tenant (default FREE si no existe registro)
@@ -193,10 +196,9 @@ app.get("/api/tenant/config", async (req, res) => {
 
     if (!tenantKey) return res.status(400).json({ error: "Missing tenant key" });
 
-    const cfg = await prisma.tenant_config.findFirst({
-      where: { business_name: tenantKey },
-      select: { business_name: true, admin_pin: true, mesero_pin: true },
-    });
+  const cfg = await prisma.tenant_config.findFirst({
+  where: { business_name: tenantKey },
+});
 
     if (!cfg) {
       return res.status(404).json({ error: "TENANT_NOT_FOUND", tenantKey });

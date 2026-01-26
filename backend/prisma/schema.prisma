@@ -157,6 +157,7 @@ model Tenant {
   quick_menu_config quick_menu_config?
   tenant_config     tenant_config?
   tenant_plan       tenant_plan?
+
 }
 
 model User {
@@ -199,3 +200,18 @@ model tenant_plan {
   updated_at DateTime @default(now())
   Tenant     Tenant   @relation(fields: [tenant_id], references: [id], onDelete: Cascade)
 }
+
+
+model PrintJob {
+  id        BigInt   @id @default(autoincrement())
+  tenantId  String
+  type      String
+  payload   Json
+  status    String   @default("pending")
+  createdAt DateTime @default(now())
+  printedAt DateTime?
+
+  @@index([tenantId, status])
+}
+
+
