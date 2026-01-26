@@ -883,6 +883,8 @@ useEffect(() => {
     });
     const data = await res.json();
     setTenantConfig(data);
+console.log("tenantConfig recibido:", data);
+
   }
   loadTenantConfig();
 }, []);
