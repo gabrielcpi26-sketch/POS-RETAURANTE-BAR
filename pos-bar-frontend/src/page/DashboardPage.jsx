@@ -3724,7 +3724,10 @@ if (!savedPrinter) {
         items: currentOrder.items,
         paymentMethod: closePaymentMethod,
         paymentRef: closePaymentRef,
-total: finalTotal,
+total: currentOrder.items?.reduce(
+  (sum, it) => sum + Number(it.precio ?? it.price ?? 0) * Number(it.qty ?? it.cantidad ?? 1),
+  0
+),
   tenantConfig: tenantConfig, // <- aquí va TU variable real
       });
     } catch (e) {
