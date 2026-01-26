@@ -3664,18 +3664,19 @@ const getBusinessNameFromStorage = (tenantKey) => {
 
 
 
-const printTicket = async ({ table, items, paymentMethod, paymentRef, total }) => {
+const printTicket = async ({ table, items, paymentMethod, paymentRef, total, tenantConfig }) => {
   const ticketText = buildTicketText({
     table,
     items,
     paymentMethod,
     paymentRef,
     total,
-    tenantConfig, // ✅ aquí
+    tenantConfig, // ✅ ahora sí viene del parámetro
   });
 
   await printTicketForTenant(ticketText);
 };
+
 
 
 
@@ -3697,10 +3698,9 @@ if (!savedPrinter) {
 }
 
 // 2.5) Último fallback: usa la seleccionada en el dropdown (estado actual)
-if (!savedPrinter && printerName) {
+if (!savedPrinter && typeof printerName !== "undefined" && printerName) {
   savedPrinter = printerName;
 }
-
 
 // 3) Si aún no hay, entonces sí avisamos
 if (!savedPrinter) {
