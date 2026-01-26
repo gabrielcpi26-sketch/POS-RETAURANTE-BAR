@@ -3533,11 +3533,52 @@ appName="POS"
 // ==============================
 // Ticket: arma texto y manda a QZ
 // ==============================
-const buildTicketText = ({ table, items, paymentMethod, paymentRef, total }) => {
+const buildTicketText = ({ table, items, paymentMethod, paymentRef, total, tenantConfig }) => {
+
   const mesa = table?.name || table?.numero || table?.id || "Mesa";
   const fecha = new Date().toLocaleString();
 
+  // ===== Datos del restaurante (tenant) =====
+  const negocioNombre =
+    tenantConfig?.nombre ||
+    tenantConfig?.restaurantName ||
+    tenantConfig?.title ||
+    "RESTAURANTE";
+
+  const negocioRazon =
+    tenantConfig?.razonSocial ||
+    tenantConfig?.razon_social ||
+    tenantConfig?.legalName ||
+    "";
+
+  const negocioTel =
+    tenantConfig?.telefono ||
+    tenantConfig?.phone ||
+    "";
+
+  const negocioDir =
+    tenantConfig?.direccion ||
+    tenantConfig?.address ||
+    "";
+
+  const negocioRFC =
+    tenantConfig?.rfc ||
+    tenantConfig?.taxId ||
+    "";
+
+
   const lines = [];
+
+
+lines.push("===============");
+
+// Encabezado del negocio
+lines.push(`${negocioNombre}`);
+if (negocioRazon) lines.push(`${negocioRazon}`);
+if (negocioDir) lines.push(`${negocioDir}`);
+if (negocioTel) lines.push(`TEL: ${negocioTel}`);
+if (negocioRFC) lines.push(`RFC: ${negocioRFC}`);
+
   lines.push("===============");
   lines.push("   TICKET VENTA");
   lines.push("===============");
@@ -3571,10 +3612,11 @@ const buildTicketText = ({ table, items, paymentMethod, paymentRef, total }) => 
   return lines.join("\n");
 };
 
-const printTicket = async ({ table, items, paymentMethod, paymentRef, total }) => {
-  const ticketText = buildTicketText({ table, items, paymentMethod, paymentRef, total });
+const printTicket = async ({ table, items, paymentMethod, paymentRef, total, tenantConfig }) => {
+  const ticketText = buildTicketText({ table, items, paymentMethod, paymentRef, total, tenantConfig });
   await printTicketForTenant(ticketText);
 };
+
 
 const printTicketForTenant = async (ticketText) => {
   if (!window.qz) {
@@ -3621,6 +3663,8 @@ if (!savedPrinter) {
         items: currentOrder.items,
         paymentMethod: closePaymentMethod,
         paymentRef: closePaymentRef,
+total: finalTotal,
+  tenantConfig: tenantConfig, // <- aquí va TU variable real
       });
     } catch (e) {
       console.warn("printTicket falló:", e);
