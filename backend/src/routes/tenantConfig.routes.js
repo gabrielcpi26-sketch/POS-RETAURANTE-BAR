@@ -6,14 +6,22 @@ const prisma = new PrismaClient();
 
 router.get("/", async (req, res) => {
   try {
-    const tenantKey = (req.tenantKey || req.headers["x-tenant"] || req.headers["x-tenant-key"] || "default")
-      .toString()
-      .trim()
-      .toLowerCase();
+    const tenantKeyRaw =
+      req.tenantKey ||
+      req.headers["x-tenant"] ||
+      req.headers["x-tenant-key"] ||
+      req.headers["X-Tenant-Key"] || // (por si acaso)
+      "default";
 
-    // ✅ FIX MINIMO: NO usar queryRaw con columnas que pueden no existir (ej. "direccion")
+    const tenantKey = String(tenantKeyRaw).trim();
+
+    // ✅ FIX MÍNIMO: si viene número ("5") busca por tenant_id; si viene texto ("elgallo") por business_name
+    const whereCfg = /^\d+$/.test(tenantKey)
+      ? { tenant_id: Number(tenantKey) }
+      : { business_name: tenantKey.toLowerCase() };
+
     const cfg = await prisma.tenant_config.findFirst({
-      where: { business_name: tenantKey },
+      where: whereCfg,
     });
 
     if (!cfg) {
@@ -33,7 +41,6 @@ router.get("/", async (req, res) => {
       meseroPin: cfg.mesero_pin ?? null,
       businessName: cfg.business_name ?? null,
 
-      // ✅ estos quedan “seguros”: si no existen en DB/Prisma, regresan null
       direccion: cfg.direccion ?? null,
       telefono: cfg.telefono ?? null,
       rfc: cfg.rfc ?? null,
@@ -54,4 +61,3 @@ router.get("/", async (req, res) => {
 });
 
 module.exports = router;
-

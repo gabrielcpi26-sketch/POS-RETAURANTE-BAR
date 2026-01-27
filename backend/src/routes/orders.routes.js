@@ -8,35 +8,34 @@ const prisma = new PrismaClient();
 console.log("✅ [BOOT] orders.routes.js CARGADO -", __filename, "time:", new Date().toISOString());
 
 // =====================================
-// ✅ TENANT (mínimo, sin romper lógica)
+// ✅ TENANT (mínimo, SIN tocar DB aquí)
 // =====================================
 async function resolveTenant(req) {
-  const tenantKey = String(
-    req.header("x-tenant") || req.header("x-tenant-key") || "default"
-  )
-    .trim()
-    .toLowerCase();
+  // 1) Si ya viene seteado por middleware global, respétalo
+  if (req.tenantId && Number(req.tenantId) > 0) {
+    req.tenant = req.tenant || { id: Number(req.tenantId) };
+    return req.tenant;
+  }
 
-  const key = tenantKey; // ✅ FIX CRÍTICO (esto faltaba)
+  // 2) Intenta por header numérico (recomendado)
+  const raw =
+    req.header("x-tenant-id") ||
+    req.header("x-tenant") ||
+    req.header("x-tenant-key") ||
+    "1";
 
-  const tenant = await prisma.tenant.upsert({
-    where: { key },
-    update: {},
-    create: {
-      key,
-      name: key,
-      updatedAt: new Date(), // ya estaba bien
-    },
-    select: {
-      id: true,
-      key: true,
-      name: true,
-    },
-  });
+  const asNum = Number(String(raw).trim());
 
-  req.tenant = tenant;
-  req.tenantId = tenant.id;
-  return tenant;
+  if (Number.isFinite(asNum) && asNum > 0) {
+    req.tenantId = asNum;
+    req.tenant = { id: asNum };
+    return req.tenant;
+  }
+
+  // 3) Fallback seguro (NO creamos tenant en DB)
+  req.tenantId = 1;
+  req.tenant = { id: 1 };
+  return req.tenant;
 }
 
 // aplica tenant a TODO este router (mínimo, sin tocar endpoints)
@@ -49,6 +48,7 @@ router.use(async (req, res, next) => {
     return res.status(500).json({ error: "No se pudo resolver tenant" });
   }
 });
+
 
 // =====================================
 // PROMOS: nombre del POS → inventario real
@@ -533,6 +533,34 @@ router.post("/", async (req, res) => {
       select: { id: true },
     });
 
+// ✅ FIX MINIMO: evitar “reabrir” mesa por autosave justo después de cerrar cuenta
+// (si se cerró hace segundos, ignoramos este POST para no recrear isPaid=false)
+if (!existingOpen && Array.isArray(items) && items.length > 0 && total > 0) {
+  const lastPaid = await prisma.order.findFirst({
+    where: {
+      tenantId,
+      tableId,
+      isPaid: true,
+      paidAt: { not: null },
+    },
+    orderBy: { paidAt: "desc" },
+    select: { paidAt: true },
+  });
+
+  if (lastPaid?.paidAt) {
+    const ms = Date.now() - new Date(lastPaid.paidAt).getTime();
+    if (ms >= 0 && ms < 5000) {
+      console.warn("🧯 [ORDERS] Ignorado POST por cierre reciente (anti-autosave):", {
+        tenantId,
+        tableId,
+        ms,
+      });
+      return res.json({ ignored: true, reason: "recently_closed" });
+    }
+  }
+}
+
+
     // ✅ 2) Update si existe, Create si no existe
     const saved = existingOpen
       ? await prisma.order.update({
@@ -992,12 +1020,10 @@ router.get("/print/stream", (req, res) => {
 });
 
 
-// ✅ CERRAR CUENTA (marca como pagadas todas las órdenes abiertas de esa mesa)
-// ✅ AQUI se descuenta inventario REAL (Regla #2)
 router.put("/close-table/:tableId", async (req, res) => {
   try {
-    const tenantId = req.tenantId;            // (Order / inventario) se queda igual
-    const tenantIdStr = String(tenantId);    // (PrintJob / SSE) SIEMPRE string
+    const tenantId = req.tenantId;
+    const tenantIdStr = String(tenantId);
 
     const tableId = Number(req.params.tableId);
     const { paymentMethod, paymentRef } = req.body;
@@ -1010,9 +1036,10 @@ router.put("/close-table/:tableId", async (req, res) => {
     }
 
     const paidAt = new Date();
+    const fromDevice = String(req.headers["x-device"] || "").toLowerCase();
 
+    // ✅ 1) SOLO cierre de cuenta dentro de TX (NO printJob, NO inventario)
     const result = await prisma.$transaction(async (tx) => {
-      // 1) Traer órdenes abiertas (incluye items)
       const openOrders = await tx.order.findMany({
         where: { tenantId, tableId, isPaid: false },
         select: { id: true, total: true, items: true },
@@ -1020,12 +1047,11 @@ router.put("/close-table/:tableId", async (req, res) => {
       });
 
       if (!openOrders.length) {
-        return { alreadyClosed: true, paidCount: 0, total: 0 };
+        return { alreadyClosed: true, paidCount: 0, total: 0, items: [] };
       }
 
       const total = openOrders.reduce((s, o) => s + Number(o.total || 0), 0);
 
-      // 2) Unir items de TODAS las órdenes abiertas
       let allItems = [];
       for (const o of openOrders) {
         try {
@@ -1034,7 +1060,6 @@ router.put("/close-table/:tableId", async (req, res) => {
         } catch {}
       }
 
-      // 3) Marcar como pagadas (idempotencia por updateMany)
       const upd = await tx.order.updateMany({
         where: { tenantId, tableId, isPaid: false },
         data: {
@@ -1048,49 +1073,8 @@ router.put("/close-table/:tableId", async (req, res) => {
         },
       });
 
-      // Si por alguna razón otro proceso ya las cerró antes de llegar aquí, no descontamos.
       if (upd.count === 0) {
-        return { alreadyClosed: true, paidCount: 0, total: 0 };
-      }
-
-      // ✅ CAMBIO MINIMO: si viene desde MESERO, encolar impresión SIN romper cierre
-      const fromDevice = String(req.headers["x-device"] || "").toLowerCase();
-
-      if (fromDevice === "mesero") {
-        const payload = {
-          table: { id: tableId, name: `Mesa ${tableId}` }, // ✅ sin DB
-          items: allItems,
-          paymentMethod,
-          paymentRef,
-          total: Number(total.toFixed(2)),
-        };
-
-        try {
-          // ⚠️ Si no existe printJob en Prisma/DB, NO debe tumbar el cierre
-          if (tx.printJob && typeof tx.printJob.create === "function") {
-            await tx.printJob.create({
-              data: {
-                tenantId: tenantIdStr, // ✅ string (Supabase column is text)
-                type: "close_ticket",
-                payload: JSON.stringify(payload),
-                status: "pending",
-              },
-            });
-
-            // ✅ (opcional útil) SSE instantáneo a la compu
-            broadcastPrintJob(tenantIdStr, payload);
-          } else {
-            console.warn("⚠️ printJob no está disponible en Prisma (se omite cola).");
-          }
-        } catch (e) {
-          console.warn("⚠️ No se pudo crear printJob (se omite cola):", e?.message || e);
-        }
-      }
-
-      // 4) ✅ DESCONTAR INVENTARIO REAL (solo aquí)
-      if (allItems.length > 0) {
-        await applyInventoryFromOrderItems(allItems, tx, tenantId);
-        console.log("📦 Inventario descontado al cerrar cuenta (OK)");
+        return { alreadyClosed: true, paidCount: 0, total: 0, items: [] };
       }
 
       return { alreadyClosed: false, paidCount: openOrders.length, total, items: allItems };
@@ -1100,10 +1084,48 @@ router.put("/close-table/:tableId", async (req, res) => {
       return res.status(200).json({ message: "No hay cuenta pendiente", paidCount: 0, total: 0 });
     }
 
+    // ✅ 2) FUERA de TX: encolar impresión (si existe tabla) SIN romper cierre
+    if (fromDevice === "mesero") {
+      const payload = {
+        table: { id: tableId, name: `Mesa ${tableId}` },
+        items: result.items || [],
+        paymentMethod,
+        paymentRef,
+        total: Number(Number(result.total || 0).toFixed(2)),
+      };
+
+      try {
+        await prisma.printJob.create({
+          data: {
+            tenantId: tenantIdStr,
+            type: "close_ticket",
+            payload: JSON.stringify(payload),
+            status: "pending",
+          },
+        });
+
+        // SSE opcional (si lo usas)
+        try { broadcastPrintJob(tenantIdStr, payload); } catch {}
+      } catch (e) {
+        console.warn("⚠️ printJob NO disponible / tabla no existe (se omite cola):", e?.message || e);
+      }
+    }
+
+    // ✅ 3) FUERA de TX: inventario (si falla, NO rompe el pago)
+    try {
+      if (result.items && result.items.length > 0) {
+        await applyInventoryFromOrderItems(result.items, prisma, tenantId);
+        console.log("📦 Inventario descontado al cerrar cuenta (OK)");
+      }
+    } catch (e) {
+      console.warn("⚠️ Inventario falló (NO rompe cierre):", e?.message || e);
+    }
+
+    // ✅ respuesta como antes
     return res.json({
       message: "Cuenta cerrada",
       paidCount: result.paidCount,
-      total: Number(result.total.toFixed(2)),
+      total: Number(Number(result.total || 0).toFixed(2)),
       paymentMethod,
     });
   } catch (err) {
@@ -1157,5 +1179,41 @@ router.post("/print-jobs/:id/printed", async (req, res) => {
     res.status(500).json({ error: "mark printed error" });
   }
 });
+
+// =======================
+// PEDIDOS ABIERTOS POR MESA
+// (lo usa el front al seleccionar mesa)
+// GET /api/orders/open/table/:tableId
+// =======================
+router.get("/open/table/:tableId", async (req, res) => {
+  try {
+    const tenantId = req.tenantId;
+    const tableId = Number(req.params.tableId);
+
+    if (!Number.isFinite(tableId)) {
+      return res.status(400).json({ error: "tableId inválido" });
+    }
+
+    const orders = await prisma.order.findMany({
+      where: { tenantId, tableId, isPaid: false },
+      orderBy: { createdAt: "asc" },
+      select: { items: true },
+    });
+
+    let allItems = [];
+    for (const o of orders) {
+      try {
+        const parsed = o.items ? JSON.parse(o.items) : [];
+        if (Array.isArray(parsed)) allItems = allItems.concat(parsed);
+      } catch {}
+    }
+
+    return res.json({ items: allItems });
+  } catch (err) {
+    console.error("Error en open/table:", err);
+    return res.status(500).json({ error: "Error al cargar pedidos de la mesa" });
+  }
+});
+
 
 module.exports = router;

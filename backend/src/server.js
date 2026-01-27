@@ -122,42 +122,34 @@ app.use((req, _res, next) => {
   next();
 });
 
-// ======================
-// ✅ RESOLVER tenantId desde tenantKey (NO rompe: default siempre)
-// ======================
+// ==============================
+// ✅ RESOLVER tenantId desde tenantKey (SIN prisma.tenant.*)
+// ==============================
 app.use(async (req, _res, next) => {
   try {
-    const key = (req.tenantKey || "default").toString().trim() || "default";
+    const keyRaw = (req.tenantKey || "default").toString().trim() || "default";
 
-// ✅ findUnique SIEMPRE debe llevar where con campo UNIQUE
-    // ✅ 1) intenta por tabla Tenant (si existe ahí)
-    let t = await prisma.tenant.findUnique({
-      where: { key },
-      select: { id: true },
-    });
-
-     // ✅ 2) si NO existe Tenant por key, crearlo (SIN usar tenant_config porque NO está en Prisma)
-    if (!t?.id) {
-      t = await prisma.tenant.upsert({
-        where: { key },
-        update: {},
-        create: {
-          key,
-          name: key,
-          updatedAt: new Date(),
-        },
-        select: { id: true },
-      });
-
-      req.tenantId = t?.id ?? null;
+    // 1) Si el tenantKey ya viene numérico (ej "5"), úsalo directo
+    const asNum = Number(keyRaw);
+    if (Number.isFinite(asNum) && asNum > 0) {
+      req.tenantId = asNum;
     } else {
-      req.tenantId = t.id; // (int)
+      // 2) Fallback: intentar resolver por tenant_config (si existe)
+      req.tenantId = null;
+      try {
+        // OJO: dejo EXACTO tu prisma.tenant_config, no toco tu estructura
+        const cfg = await prisma.tenant_config.findFirst({
+          where: { business_name: keyRaw },
+          select: { tenant_id: true },
+        });
+        if (cfg?.tenant_id != null) req.tenantId = Number(cfg.tenant_id);
+      } catch (e) {
+        req.tenantId = null;
+      }
     }
 
-
-
-    // ✅ PLAN por tenant (default FREE si no existe registro)
-        req.tenantPlan = "FREE";
+    // 3) ✅ PLAN por tenant (mantiene tu lógica de planes)
+    req.tenantPlan = "FREE";
     if (req.tenantId) {
       try {
         const rows = await prisma.$queryRaw`
@@ -166,18 +158,19 @@ app.use(async (req, _res, next) => {
           limit 1
         `;
         req.tenantPlan = ((rows && rows[0] && rows[0].plan) ? rows[0].plan : "FREE").toString();
-      } catch (e) {
+      } catch {
         req.tenantPlan = "FREE";
       }
     }
 
-
     return next();
   } catch (e) {
     console.error("❌ TENANT resolve error:", e);
-    return next(e);
+    return next();
   }
 });
+
+
 
 // Health checks
 app.get("/", (_req, res) => res.send("OK - POS backend running"));
@@ -228,6 +221,8 @@ app.use("/api/onboarding", onboardingRoutes);
 app.use("/api/tenant-config", tenantConfigRoutes);
 app.use("/qz", qzRoutes);
 app.use("/api/qz", require("./routes/qz.routes"));
+app.use("/api/print-jobs", require("./routes/printJobs.routes"));
+
 
 
 // Puerto
