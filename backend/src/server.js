@@ -14,6 +14,15 @@ console.log(
   (process.env.DATABASE_URL || "").split("@")[1]?.split("/")[0]
 );
 
+
+// ✅ FIX JSON BigInt (evita 500 al responder objetos con id int8)
+if (typeof BigInt !== "undefined" && !BigInt.prototype.toJSON) {
+  BigInt.prototype.toJSON = function () {
+    return this.toString();
+  };
+}
+
+
 // Rutas
 const authRoutes = require("./routes/auth.routes");
 const areasRoutes = require("./routes/areas.routes");

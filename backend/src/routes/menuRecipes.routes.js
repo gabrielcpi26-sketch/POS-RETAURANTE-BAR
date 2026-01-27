@@ -38,13 +38,16 @@ router.post("/", async (req, res) => {
     const { menuName, items } = req.body || {};
     if (!menuName) return res.status(400).json({ error: "menuName requerido" });
 
-    const created = await prisma.menuRecipe.create({
-      data: {
-        tenantId, // ✅ TENANT
-        menuName: String(menuName).trim(),
-        items: JSON.stringify(Array.isArray(items) ? items : []),
-      },
-    });
+  const created = await prisma.menuRecipe.create({
+  data: {
+    tenantId,
+    menuName,
+    items: JSON.stringify(items || []),
+    updatedAt: new Date(),
+createdAt: new Date(),
+
+  },
+});
 
     res.json(created);
   } catch (err) {
