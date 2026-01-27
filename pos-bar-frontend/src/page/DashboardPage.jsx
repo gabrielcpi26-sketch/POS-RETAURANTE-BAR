@@ -168,7 +168,10 @@ const QUICK_KEY = `pos_quick_products_v1_${getTenantKeySafe()}`;
 
 function loadStoredProducts() {
   try {
-    const raw = localStorage.getItem("pos_quick_products");
+    const raw =
+      localStorage.getItem(QUICK_KEY) ||
+      localStorage.getItem("pos_quick_products");
+
     if (!raw) return DEFAULT_PRODUCTS;
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed) || parsed.length === 0) return DEFAULT_PRODUCTS;
@@ -177,6 +180,7 @@ function loadStoredProducts() {
     return DEFAULT_PRODUCTS;
   }
 }
+
 
 function getAutoRange(days = 7) {
   const to = new Date();
@@ -309,37 +313,50 @@ useEffect(() => {
 useEffect(() => {
   let alive = true;
 
-  const loadTenantPlan = async () => {
+  const tick = async () => {
     try {
-      const tenantKey =
-        localStorage.getItem("tenant_key")?.toString().trim() || "default";
+      // Solo si esta PC tiene QZ (si no, ni intentes)
+      if (!window.qz) return;
 
-      const res = await fetch(`${API_URL}/api/tenant/plan`, {
-        headers: {
-          "X-Tenant-Key": tenantKey,
-        },
+      const base = import.meta.env.VITE_API_URL || "http://localhost:4000";
+      const res = await fetch(`${base}/api/print-jobs/next`, {
+        headers: { ...tenantHeaders() },
       });
-
       if (!res.ok) return;
 
       const data = await res.json();
-      const plan = (data?.plan || "FREE").toString();
+      const job = data?.job;
+      if (!job) return;
 
-      if (!alive) return;
+      // Aquí ocupas armar el ticket con el orderId
+      // 1) Traes orden:
+      const orderRes = await fetch(`${base}/api/orders/${job.orderId}`, {
+        headers: { ...tenantHeaders() },
+      });
+      if (!orderRes.ok) return;
+      const order = await orderRes.json();
 
-      localStorage.setItem("tenant_plan", plan);
-      setTenantPlan(plan);
-    } catch {
-      // ❗ no rompe nada, se queda en FREE
+      // 2) armas tu ticketPayload como ya lo haces hoy
+      const ticketPayload = buildTicketPayloadFromOrder(order, job.paymentMethod);
+
+      // 3) imprimes local con QZ
+      await qzPrint(ticketPayload);
+    } catch (e) {
+      // silencioso
+      console.warn("Print station error:", e);
     }
   };
 
-  loadTenantPlan();
+  const interval = setInterval(() => {
+    if (alive) tick();
+  }, 1500); // cada 1.5s
 
   return () => {
     alive = false;
+    clearInterval(interval);
   };
 }, []);
+
 
 
 // ======================
@@ -388,6 +405,10 @@ const [turnoAbierto, setTurnoAbierto] = useState(
     () => ({ ...baseTheme, ...(customPrimary ? { primary: customPrimary } : {}) }),
     [baseTheme, customPrimary]
   );
+
+
+const printEnqueuedRef = useRef(false);
+
 
 const [printerName, setPrinterName] = useState(() => {
   try { return localStorage.getItem("pos_printer_name_v1") || ""; } catch { return ""; }
@@ -892,7 +913,7 @@ useEffect(() => {
       const tenantKey = getTenantKeySafe();
 
       const res = await fetch(`${API_URL}/api/tenant-config`, {
-        headers: { "x-tenant": tenantKey },
+        headers: { "X-Tenant-Key": tenantKey },
       });
 
       if (!res.ok) {
@@ -901,17 +922,34 @@ useEffect(() => {
       }
 
       const data = await res.json();
-
-      // 🔒 Guardamos en estado (fuente de verdad)
       setTenantConfig(data);
 
-      // 🧠 Cache local (NO rompe nada existente)
-      localStorage.setItem(
-        "pos_tenant_cfg_v1_default",
-        JSON.stringify(data)
-      );
+// ✅ tenant_key = tenant_id NUMÉRICO (fuente real: backend / Supabase)
+// ✅ NO usar businessName
+// ✅ NO guardar "default"
 
-      // 👀 Debug visible
+try {
+  const cur = localStorage.getItem("tenant_key");
+
+  const candidate =
+    data?.tenant_id ??
+    data?.tenantId ??
+    data?.id ??
+    null;
+
+  if (
+    (!cur || cur === "default") &&
+    candidate !== null &&
+    candidate !== undefined &&
+    String(candidate).trim() !== ""
+  ) {
+    localStorage.setItem("tenant_key", String(candidate).trim());
+  }
+} catch {}
+
+
+
+      localStorage.setItem("pos_tenant_cfg_v1_default", JSON.stringify(data));
       console.log("tenantConfig recibido:", data);
     } catch (err) {
       console.error("Error cargando tenant-config:", err);
@@ -1216,8 +1254,11 @@ useEffect(() => {
 
       if (!alive) return;
 
-      setQuickProducts(items);
-      localStorage.setItem(QUICK_KEY, JSON.stringify(items));
+      // ✅ NO pises tu menú local si el backend viene vacío
+      if (Array.isArray(items) && items.length > 0) {
+        setQuickProducts(items);
+        localStorage.setItem(QUICK_KEY, JSON.stringify(items));
+      }
     } catch {
       // silencioso para no romper
     } finally {
@@ -1232,6 +1273,7 @@ useEffect(() => {
   };
   // IMPORTANTE: si cambia tenant, cambia QUICK_KEY
 }, [QUICK_KEY]);
+
 
 useEffect(() => {
   let alive = true;
@@ -1757,6 +1799,8 @@ const res = await fetch(`${API_URL}/api/areas/${editingAreaId}`, {
     alert("No se pudo eliminar el área");
   }
 };
+
+
 
 
 const handleCloseTable = () => {
@@ -3537,7 +3581,15 @@ appName="POS"
         <button
           type="button"
           disabled={closingTable}
-         onClick={async () => {
+onClick={async () => {
+  // ⛔ BLOQUEO REAL anti doble click / doble llamada
+  if (printEnqueuedRef.current) return;
+  printEnqueuedRef.current = true;
+
+  if (closingTable) {
+    printEnqueuedRef.current = false;
+    return;
+  }
   if (!isTurnoAbierto()) {
     alert("⛔ Turno cerrado. Abre turno para cobrar.");
     return;
@@ -3545,6 +3597,7 @@ appName="POS"
 
   try {
     setClosingTable(true);
+  
     const tenantKey = getTenantKeySafe();
 
     await fetch(
@@ -3552,11 +3605,13 @@ appName="POS"
       {
         method: "PUT",
         headers: {
-          "Content-Type": "application/json",
-          "X-Tenant-Key": tenantKey,
-"x-device": "mesero",
+  "Content-Type": "application/json",
+  "X-Tenant-Key": tenantKey,
+  "x-tenant-key": tenantKey,
+  "x-tenant": tenantKey,
+  "x-device": "mesero",
+},
 
-        },
         body: JSON.stringify({
           paymentMethod: closePaymentMethod,
           paymentRef:
@@ -3569,19 +3624,53 @@ appName="POS"
 
 
 
-// ✅ En mesero NO imprimimos aquí. Solo confirmamos y listo.
-// (el backend ya encoló el PrintJob)
 if (isMesero) {
-  alert("Cuenta cerrada (enviada a impresión)");
-  setClosingTable(false);
-  return;
+  try {
+    const itemsMesa = ordersByTable?.[selectedTable.id]?.items || [];
+
+    const ticketText = buildTicketText({
+      table: selectedTable,
+      items: itemsMesa,
+      paymentMethod: closePaymentMethod,
+      paymentRef: closePaymentMethod === "TRANSFER" ? closePaymentRef : "",
+      total: itemsMesa.reduce(
+        (sum, it) => sum + (Number(it.price || it.precio || 0) * Number(it.qty || 1)),
+        0
+      ),
+      tenantConfig,
+    });
+
+    try {
+      const base = import.meta.env.VITE_API_URL || "http://localhost:4000";
+
+   await fetch(`${base}/api/print-jobs/close-ticket`, {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    ...tenantHeaders(),
+  },
+  body: JSON.stringify({ ticketText }),
+});
+
+printEnqueued = true;
+
+    } catch (err) {
+      console.warn("enqueue print failed (mesero):", err);
+      // NO alert al mesero
+    }
+  } catch (e) {
+    console.warn("mesero ticket build failed:", e);
+  }
+
+  // IMPORTANTE: NO return; el flujo debe seguir para cerrar modal/limpiar mesa
 }
+
 
 
 // ==============================
 // Ticket: arma texto y manda a QZ
 // ==============================
-const buildTicketText = ({ table, items, paymentMethod, paymentRef, total, tenantConfig }) => {
+function buildTicketText({ table, items, paymentMethod, paymentRef, total, tenantConfig }) {
   const mesa = table?.name || table?.numero || table?.id || "Mesa";
   const fecha = new Date().toLocaleString();
 
@@ -3757,7 +3846,43 @@ total: currentOrder.items?.reduce(
       console.warn("printTicket falló:", e);
     }
 
+// 🆕 MESERO: mandar ticket a la PC con QZ (print station)
+try {
+  const base = import.meta.env.VITE_API_URL || "http://localhost:4000";
+
+  await fetch(`${base}/api/print-jobs/close-ticket`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...tenantHeaders(),
+    },
+  body: JSON.stringify({
+  ticketText: buildTicketText({
+    table: selectedTable,
+    items: currentOrder.items,
+    paymentMethod: closePaymentMethod,
+    paymentRef: closePaymentRef,
+    total: currentOrder.items?.reduce(
+      (sum, it) =>
+        sum +
+        Number(it.precio ?? it.price ?? 0) *
+          Number(it.qty ?? it.cantidad ?? 1),
+      0
+    ),
+    tenantConfig,
+  }),
+}),
+
+  });
+} catch (err) {
+  console.warn("enqueue print failed:", err);
+}
+
+
     alert("✅ Cuenta cerrada");
+
+alert("🖨️ Ticket enviado a impresión (PC)");
+
 
     setOpenTableIds((prev) => {
       const next = new Set(prev);
@@ -3779,10 +3904,10 @@ total: currentOrder.items?.reduce(
     alert("❌ Error al cerrar cuenta");
   } finally {
     setClosingTable(false);
+printEnqueuedRef.current = false;
   }
 }}
-
-          style={{
+  style={{
             padding: "8px 14px",
             borderRadius: 10,
             border: "1px solid #22c55e",
