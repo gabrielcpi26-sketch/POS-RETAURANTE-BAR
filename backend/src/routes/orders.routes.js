@@ -1067,14 +1067,15 @@ if (fromDevice === "mesero") {
   try {
     // ⚠️ Si no existe printJob en Prisma/DB, NO debe tumbar el cierre
     if (tx.printJob && typeof tx.printJob.create === "function") {
-      await tx.printJob.create({
-        data: {
-          tenantId,
-          type: "close_ticket",
-          payload: JSON.stringify(payload),
-          status: "pending",
-        },
-      });
+    await tx.printJob.create({
+  data: {
+    tenantId: String(tenantId),
+    type: "close_ticket",
+    payload: JSON.stringify(payload),
+    status: "pending",
+  },
+});
+
 } else {
   console.warn("⚠️ printJob no está disponible en Prisma (se omite cola).");
 }
