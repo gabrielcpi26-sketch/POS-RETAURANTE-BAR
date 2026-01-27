@@ -3728,11 +3728,12 @@ if (!savedPrinter && typeof printerName !== "undefined" && printerName) {
   savedPrinter = printerName;
 }
 
-// 3) Si aún no hay, entonces sí avisamos
-if (!savedPrinter) {
+// 3) Si aún no hay, SOLO avisar en compu (NO en mesero)
+if (!savedPrinter && localStorage.getItem("x-device") !== "mesero") {
   alert("No hay impresora configurada para este restaurante");
   return;
 }
+
 
   const config = qz.configs.create(savedPrinter);
   await qz.print(config, [ticketText]);
