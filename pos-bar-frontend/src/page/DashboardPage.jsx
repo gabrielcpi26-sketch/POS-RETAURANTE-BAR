@@ -3582,6 +3582,14 @@ appName="POS"
       }
     );
 
+
+if (isMesero) {
+  // En mesero NO imprimimos aquí. Solo cerramos cuenta y el backend encola el PrintJob.
+  alert("Cuenta cerrada");
+  setClosingTable(false);
+  return;
+}
+
 // ==============================
 // Ticket: arma texto y manda a QZ
 // ==============================
