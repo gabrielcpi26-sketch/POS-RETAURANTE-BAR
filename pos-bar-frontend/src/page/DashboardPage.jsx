@@ -394,23 +394,17 @@ const [printerName, setPrinterName] = useState(() => {
 });
 const [printers, setPrinters] = useState([]);
 
-
-
-  useEffect(() => {
-    const root = document.documentElement;
-    const t = activeTheme;
-    root.style.setProperty("--pos-bg-gradient", t.bgGradient);
-    root.style.setProperty("--pos-card-bg", t.cardBg);
-    root.style.setProperty("--pos-border", t.border);
-    root.style.setProperty("--pos-primary", t.primary);
-    root.style.setProperty("--pos-primary-soft", t.primarySoft);
-    root.style.setProperty("--pos-text", t.text);
-    root.style.setProperty("--pos-danger", t.danger);
-  }, [activeTheme]);
-
-
-
-
+useEffect(() => {
+  const root = document.documentElement;
+  const t = activeTheme;
+  root.style.setProperty("--pos-bg-gradient", t.bgGradient);
+  root.style.setProperty("--pos-card-bg", t.cardBg);
+  root.style.setProperty("--pos-border", t.border);
+  root.style.setProperty("--pos-primary", t.primary);
+  root.style.setProperty("--pos-primary-soft", t.primarySoft);
+  root.style.setProperty("--pos-text", t.text);
+  root.style.setProperty("--pos-danger", t.danger);
+}, [activeTheme]);
 
 const printedIdsRef = useRef(new Set());
 const printingIdsRef = useRef(new Set());
@@ -434,96 +428,89 @@ const persistPrintedSet = (tenantKey) => {
   } catch {}
 };
 
-
-
 useEffect(() => {
   const tenantKey = localStorage.getItem("tenant_key") || "default";
   loadPrintedSet(tenantKey);
 }, []);
 
-
 useEffect(() => {
   const selectedPrinter =
-  localStorage.getItem("pos_selected_printer") ||
-  localStorage.getItem("pos_printer_name_v1") ||
-  "";
+    localStorage.getItem("pos_selected_printer") ||
+    localStorage.getItem("pos_printer_name_v1") ||
+    "";
 
-const isBadPrinter =
-  !selectedPrinter ||
-  selectedPrinter === "Generic / Text Only" ||
-  /pdf/i.test(selectedPrinter);
+  const isBadPrinter =
+    !selectedPrinter ||
+    selectedPrinter === "Generic / Text Only" ||
+    /pdf/i.test(selectedPrinter);
 
-if (isBadPrinter) return;
-
+  if (isBadPrinter) return;
 
   const interval = setInterval(async () => {
-const selectedPrinterNow =
-  localStorage.getItem("pos_selected_printer") ||
-  localStorage.getItem("pos_printer_name_v1") ||
-  "";
+    const selectedPrinterNow =
+      localStorage.getItem("pos_selected_printer") ||
+      localStorage.getItem("pos_printer_name_v1") ||
+      "";
 
-if (
-  !selectedPrinterNow ||
-  selectedPrinterNow === "Generic / Text Only" ||
-  /pdf/i.test(selectedPrinterNow)
-) {
-  return;
-}
+    if (
+      !selectedPrinterNow ||
+      selectedPrinterNow === "Generic / Text Only" ||
+      /pdf/i.test(selectedPrinterNow)
+    ) {
+      return;
+    }
 
     try {
       const tenantKey = localStorage.getItem("tenant_key") || "default";
 
-     
-
- const res = await fetch(`${API_URL}/api/orders?print=pending`, {
-        headers: { "X-Tenant-Key": tenantKey },
-      });
+      // ✅ POLLING ÚNICO Y REAL (PrintJob)
+      const res = await fetch(
+        `${API_URL}/api/orders/print-jobs?status=pending`,
+        { headers: { "X-Tenant-Key": tenantKey } }
+      );
 
       if (!res.ok) return;
 
-      const orders = await res.json();
-      if (!Array.isArray(orders) || orders.length === 0) return;
+      const jobs = await res.json();
+      if (!Array.isArray(jobs) || jobs.length === 0) return;
 
-    if (printedIdsRef.current.size === 0) loadPrintedSet(tenantKey);
+      if (printedIdsRef.current.size === 0) loadPrintedSet(tenantKey);
 
-for (const order of orders) {
-  const oid = order?.id ?? order?._id ?? order?.orderId;
-  if (!oid) continue;
+      for (const job of jobs) {
+        const oid = job?.id;
+        if (!oid) continue;
 
-  if (printedIdsRef.current.has(oid) || printingIdsRef.current.has(oid)) continue;
+        if (
+          printedIdsRef.current.has(oid) ||
+          printingIdsRef.current.has(oid)
+        ) continue;
 
-  printingIdsRef.current.add(oid);
-  try {
-    await printTicket(order);
-    printedIdsRef.current.add(oid);
-    persistPrintedSet(tenantKey);
-  } catch (e) {
-    console.warn("Print failed", e);
-  } finally {
-    printingIdsRef.current.delete(oid);
-  }
-}
+        printingIdsRef.current.add(oid);
+        try {
+          const payload =
+            typeof job.payload === "string"
+              ? JSON.parse(job.payload)
+              : job.payload;
 
+          await printTicket(payload); // 🔥 imprime ticket real
 
-// además de tu fetch actual /api/orders?print=pending ...
-const r2 = await fetch(`${API_URL}/api/print-jobs?type=close_ticket&status=pending`, {
-  headers: { "X-Tenant-Key": tenantKey }, // o "x-tenant" como lo uses aquí
-});
+          printedIdsRef.current.add(oid);
+          persistPrintedSet(tenantKey);
 
-const jobs = await r2.json();
-
-for (const j of jobs) {
-  const payload = JSON.parse(j.payload);
-
-  await printTicket(payload); // 👈 usa tu printTicket actual (buildTicketText + QZ)
-
-  await fetch(`${API_URL}/api/print-jobs/${j.id}/printed`, {
-    method: "POST",
-    headers: { "X-Tenant-Key": tenantKey },
-  });
-}
-
-
+          // ✅ marcar como impreso en backend
+          await fetch(
+            `${API_URL}/api/orders/print-jobs/${oid}/printed`,
+            {
+              method: "POST",
+              headers: { "X-Tenant-Key": tenantKey },
+            }
+          );
+        } catch (e) {
+          console.warn("Print failed", e);
+        } finally {
+          printingIdsRef.current.delete(oid);
+        }
+      }
     } catch (e) {
       console.warn("Printer polling error", e);
     }
@@ -532,11 +519,9 @@ for (const j of jobs) {
   return () => clearInterval(interval);
 }, [printerName]);
 
-
 useEffect(() => {
-  // Conecta QZ solo en la tablet (caja)
+  // Conecta QZ solo en la compu (caja)
   if (!window.qz) return;
-
   qz.websocket.connect().catch(() => {});
 }, []);
 
@@ -3583,12 +3568,15 @@ appName="POS"
     );
 
 
+
+// ✅ En mesero NO imprimimos aquí. Solo confirmamos y listo.
+// (el backend ya encoló el PrintJob)
 if (isMesero) {
-  // En mesero NO imprimimos aquí. Solo cerramos cuenta y el backend encola el PrintJob.
-  alert("Cuenta cerrada");
+  alert("Cuenta cerrada (enviada a impresión)");
   setClosingTable(false);
   return;
 }
+
 
 // ==============================
 // Ticket: arma texto y manda a QZ
