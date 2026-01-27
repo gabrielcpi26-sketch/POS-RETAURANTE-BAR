@@ -11,18 +11,12 @@ router.get("/", async (req, res) => {
       .trim()
       .toLowerCase();
 
- const rows = await prisma.$queryRaw`
-  select business_name, admin_pin, mesero_pin, direccion, telefono, rfc, razon_social
-  from public.tenant_config
-  where business_name = ${tenantKey}
-  limit 1
-`;
+    // ✅ FIX MINIMO: NO usar queryRaw con columnas que pueden no existir (ej. "direccion")
+    const cfg = await prisma.tenant_config.findFirst({
+      where: { business_name: tenantKey },
+    });
 
-
-
-    const row = rows && rows[0] ? rows[0] : null;
-
-    if (!row) {
+    if (!cfg) {
       return res.json({
         adminPin: null,
         meseroPin: null,
@@ -35,13 +29,15 @@ router.get("/", async (req, res) => {
     }
 
     return res.json({
-      adminPin: row.admin_pin ?? null,
-      meseroPin: row.mesero_pin ?? null,
-      businessName: row.business_name ?? null,
-      direccion: row.direccion ?? null,
-      telefono: row.telefono ?? null,
-      rfc: row.rfc ?? null,
-      razonSocial: row.razon_social ?? null,
+      adminPin: cfg.admin_pin ?? null,
+      meseroPin: cfg.mesero_pin ?? null,
+      businessName: cfg.business_name ?? null,
+
+      // ✅ estos quedan “seguros”: si no existen en DB/Prisma, regresan null
+      direccion: cfg.direccion ?? null,
+      telefono: cfg.telefono ?? null,
+      rfc: cfg.rfc ?? null,
+      razonSocial: cfg.razon_social ?? cfg.razonSocial ?? null,
     });
   } catch (e) {
     console.error("tenant-config error:", e);
@@ -58,3 +54,4 @@ router.get("/", async (req, res) => {
 });
 
 module.exports = router;
+

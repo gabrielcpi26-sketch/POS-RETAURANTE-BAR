@@ -958,10 +958,10 @@ router.post("/close-day", async (req, res) => {
 // =======================
 // PRINT STREAM (SSE) por tenant
 // =======================
-const printClientsByTenant = new Map(); // tenantId -> Set(res)
+const printClientsByTenant = new Map(); // tenantId(str) -> Set(res)
 
-function broadcastPrintJob(tenantId, payload) {
-  const clients = printClientsByTenant.get(tenantId);
+function broadcastPrintJob(tenantIdStr, payload) {
+  const clients = printClientsByTenant.get(tenantIdStr);
   if (!clients || clients.size === 0) return;
   const msg = `data: ${JSON.stringify(payload)}\n\n`;
   for (const res of clients) {
@@ -970,15 +970,15 @@ function broadcastPrintJob(tenantId, payload) {
 }
 
 router.get("/print/stream", (req, res) => {
-  const tenantId = req.tenantId;
+  const tenantIdStr = String(req.tenantId);
 
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders?.();
 
-  if (!printClientsByTenant.has(tenantId)) printClientsByTenant.set(tenantId, new Set());
-  printClientsByTenant.get(tenantId).add(res);
+  if (!printClientsByTenant.has(tenantIdStr)) printClientsByTenant.set(tenantIdStr, new Set());
+  printClientsByTenant.get(tenantIdStr).add(res);
 
   // ping para que no muera
   const keep = setInterval(() => {
@@ -987,7 +987,7 @@ router.get("/print/stream", (req, res) => {
 
   req.on("close", () => {
     clearInterval(keep);
-    try { printClientsByTenant.get(tenantId)?.delete(res); } catch {}
+    try { printClientsByTenant.get(tenantIdStr)?.delete(res); } catch {}
   });
 });
 
@@ -996,7 +996,8 @@ router.get("/print/stream", (req, res) => {
 // ✅ AQUI se descuenta inventario REAL (Regla #2)
 router.put("/close-table/:tableId", async (req, res) => {
   try {
-    const tenantId = req.tenantId;
+    const tenantId = req.tenantId;            // (Order / inventario) se queda igual
+    const tenantIdStr = String(tenantId);    // (PrintJob / SSE) SIEMPRE string
 
     const tableId = Number(req.params.tableId);
     const { paymentMethod, paymentRef } = req.body;
@@ -1040,52 +1041,51 @@ router.put("/close-table/:tableId", async (req, res) => {
           isPaid: true,
           paidAt,
           paymentMethod,
-          paymentRef: String(paymentMethod).toUpperCase() === "TRANSFER" ? (paymentRef || "") : "",
+          paymentRef:
+            String(paymentMethod).toUpperCase() === "TRANSFER"
+              ? (paymentRef || "")
+              : "",
         },
       });
 
-
-
       // Si por alguna razón otro proceso ya las cerró antes de llegar aquí, no descontamos.
-     
-if (upd.count === 0) {
+      if (upd.count === 0) {
         return { alreadyClosed: true, paidCount: 0, total: 0 };
       }
 
-// ✅ CAMBIO MINIMO: si viene desde MESERO, encolar impresión SIN romper cierre
-const fromDevice = String(req.headers["x-device"] || "").toLowerCase();
+      // ✅ CAMBIO MINIMO: si viene desde MESERO, encolar impresión SIN romper cierre
+      const fromDevice = String(req.headers["x-device"] || "").toLowerCase();
 
-if (fromDevice === "mesero") {
-  const payload = {
-    table: { id: tableId, name: `Mesa ${tableId}` }, // ✅ sin DB
-    items: allItems,
-    paymentMethod,
-    paymentRef,
-    total: Number(total.toFixed(2)),
-  };
+      if (fromDevice === "mesero") {
+        const payload = {
+          table: { id: tableId, name: `Mesa ${tableId}` }, // ✅ sin DB
+          items: allItems,
+          paymentMethod,
+          paymentRef,
+          total: Number(total.toFixed(2)),
+        };
 
-  try {
-    // ⚠️ Si no existe printJob en Prisma/DB, NO debe tumbar el cierre
-    if (tx.printJob && typeof tx.printJob.create === "function") {
-    await tx.printJob.create({
-  data: {
-    tenantId: String(tenantId),
-    type: "close_ticket",
-    payload: JSON.stringify(payload),
-    status: "pending",
-  },
-});
+        try {
+          // ⚠️ Si no existe printJob en Prisma/DB, NO debe tumbar el cierre
+          if (tx.printJob && typeof tx.printJob.create === "function") {
+            await tx.printJob.create({
+              data: {
+                tenantId: tenantIdStr, // ✅ string (Supabase column is text)
+                type: "close_ticket",
+                payload: JSON.stringify(payload),
+                status: "pending",
+              },
+            });
 
-} else {
-  console.warn("⚠️ printJob no está disponible en Prisma (se omite cola).");
-}
-
-
-  } catch (e) {
-    console.warn("⚠️ No se pudo crear printJob (se omite cola):", e?.message || e);
-  }
-}
-
+            // ✅ (opcional útil) SSE instantáneo a la compu
+            broadcastPrintJob(tenantIdStr, payload);
+          } else {
+            console.warn("⚠️ printJob no está disponible en Prisma (se omite cola).");
+          }
+        } catch (e) {
+          console.warn("⚠️ No se pudo crear printJob (se omite cola):", e?.message || e);
+        }
+      }
 
       // 4) ✅ DESCONTAR INVENTARIO REAL (solo aquí)
       if (allItems.length > 0) {
@@ -1093,15 +1093,12 @@ if (fromDevice === "mesero") {
         console.log("📦 Inventario descontado al cerrar cuenta (OK)");
       }
 
-      // ✅ CAMBIO MINIMO: regresamos items para que la compu imprima lo mismo
       return { alreadyClosed: false, paidCount: openOrders.length, total, items: allItems };
     });
 
     if (result.alreadyClosed) {
       return res.status(200).json({ message: "No hay cuenta pendiente", paidCount: 0, total: 0 });
     }
-
- 
 
     return res.json({
       message: "Cuenta cerrada",
@@ -1116,145 +1113,27 @@ if (fromDevice === "mesero") {
 });
 
 
-// =======================
-// PEDIDOS ABIERTOS POR MESA
-// =======================
-router.get("/open/table/:tableId", async (req, res) => {
-  try {
-    const tenantId = req.tenantId;
-
-    const tableId = Number(req.params.tableId);
-
-    const orders = await prisma.order.findMany({
-      where: {
-        tenantId,
-        tableId,
-        isPaid: false,
-      },
-      orderBy: { createdAt: "asc" },
-      select: { items: true },
-    });
-
-    let allItems = [];
-    for (const o of orders) {
-      try {
-        const parsed = o.items ? JSON.parse(o.items) : [];
-        allItems = allItems.concat(parsed);
-      } catch {}
-    }
-
-    res.json({ items: allItems });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Error al cargar pedidos de la mesa" });
-  }
-});
-
-// ======================================
-// CANCELAR / DEVOLVER VENTA (ROLLBACK)
-// ======================================
-router.put("/cancel/:orderId", async (req, res) => {
-  try {
-    const tenantId = req.tenantId;
-
-    const orderId = Number(req.params.orderId);
-    if (!Number.isFinite(orderId)) {
-      return res.status(400).json({ error: "orderId inválido" });
-    }
-
-    // ✅ FIX: guardar total fuera (order NO existe afuera del tx)
-    let cancelledTotal = 0;
-
-    await prisma.$transaction(async (tx) => {
-      // 1️⃣ Traer la orden (AISLADA POR TENANT)
-      const order = await tx.order.findFirst({
-        where: { id: orderId, tenantId },
-        select: {
-          id: true,
-          isPaid: true,
-          items: true,
-          total: true,
-          isCancelled: true,
-          cancelledAt: true,
-        },
-      });
-
-      if (!order) throw new Error("Orden no encontrada");
-
-      // ✅ Guardar total para responder
-      cancelledTotal = Number(order.total || 0);
-
-      // 2️⃣ Validaciones duras
-      if (!order.isPaid) throw new Error("La orden no está pagada");
-
-      if (order.isCancelled || order.cancelledAt) {
-        throw new Error("La orden ya fue cancelada anteriormente");
-      }
-
-      // 3️⃣ Idempotencia extra: ¿ya existe movimiento IN de devolución? (AISLADO POR TENANT)
-      const alreadyCanceled = await tx.inventoryMovement.findFirst({
-        where: {
-          ...(tenantId ? { tenantId } : {}),
-          type: "IN",
-          reason: { contains: `Devolución orden #${orderId}` },
-        },
-        select: { id: true },
-      });
-
-      if (alreadyCanceled) throw new Error("La orden ya fue cancelada anteriormente");
-
-      // 4️⃣ Parsear items
-      let items = [];
-      try {
-        items = order.items ? JSON.parse(order.items) : [];
-      } catch {
-        items = [];
-      }
-
-      if (!items.length) throw new Error("La orden no tiene items para revertir");
-
-      // 5️⃣ ✅ Rollback inventario (SI FALLA → debe fallar la cancelación)
-      await revertInventoryFromOrderItems(items, tx, orderId, tenantId);
-
-      // 6️⃣ Marcar cancelación permanente (misma transacción)
-      await tx.order.update({
-        where: { id: orderId },
-        data: { isCancelled: true, cancelledAt: new Date() },
-      });
-    });
-
-    return res.json({
-      ok: true,
-      message: "Venta cancelada y stock restaurado correctamente",
-      orderId,
-      cancelledTotal,
-    });
-  } catch (err) {
-    console.error("❌ Error cancelando venta:", err.message || err);
-    return res.status(400).json({
-      error: err.message || "No se pudo cancelar la venta",
-    });
-  }
-});
-
 // ✅ Traer tickets pendientes para imprimir (solo compu)
 router.get("/print-jobs", async (req, res) => {
   try {
-    const tenantId = req.tenantId;
+    const tenantIdStr = String(req.tenantId);
+
     const type = String(req.query.type || "");
     const status = String(req.query.status || "pending");
 
     const jobs = await prisma.printJob.findMany({
-      where: { tenantId, type, status },
+      where: { tenantId: tenantIdStr, type, status },
       orderBy: { id: "asc" },
       take: 20,
     });
 
-    res.json(jobs.map(j => ({
-      id: j.id,
-      type: j.type,
-      payload: j.payload,
-    })));
+    res.json(
+      jobs.map((j) => ({
+        id: j.id,
+        type: j.type,
+        payload: j.payload,
+      }))
+    );
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: "print-jobs error" });
@@ -1264,11 +1143,11 @@ router.get("/print-jobs", async (req, res) => {
 // ✅ Marcar como impreso
 router.post("/print-jobs/:id/printed", async (req, res) => {
   try {
-    const tenantId = req.tenantId;
+    const tenantIdStr = String(req.tenantId);
     const id = Number(req.params.id);
 
     await prisma.printJob.updateMany({
-      where: { id, tenantId },
+      where: { id, tenantId: tenantIdStr },
       data: { status: "printed", printedAt: new Date() },
     });
 
@@ -1278,6 +1157,5 @@ router.post("/print-jobs/:id/printed", async (req, res) => {
     res.status(500).json({ error: "mark printed error" });
   }
 });
-
 
 module.exports = router;
