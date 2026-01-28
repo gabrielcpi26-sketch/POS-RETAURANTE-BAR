@@ -1,4 +1,6 @@
-require("dotenv").config({ path: ".env.dev" });
+const dotenv = require("dotenv");
+dotenv.config({ path: process.env.NODE_ENV === "production" ? ".env" : ".env.dev" });
+
 
 // backend/src/server.js
 const express = require("express");
@@ -6,6 +8,7 @@ const cors = require("cors");
 const { PrismaClient } = require("@prisma/client");
 const prisma = require("./prisma");
 const qzRoutes = require("./routes/qz.routes");
+const printJobsRoutes = require("./routes/printJobs.routes");
 
 
 
@@ -231,6 +234,7 @@ app.use("/api/tenant-config", tenantConfigRoutes);
 app.use("/qz", qzRoutes);
 app.use("/api/qz", require("./routes/qz.routes"));
 app.use("/api/print-jobs", require("./routes/printJobs.routes"));
+app.use("/api/print-jobs", printJobsRoutes);
 
 
 

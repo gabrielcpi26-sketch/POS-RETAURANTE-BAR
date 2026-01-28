@@ -6,33 +6,38 @@ const prisma = new PrismaClient();
 // Cola fallback (por si no existe tabla o falla SQL)
 const PRINT_QUEUE = [];
 
+// Para NO spamear logs
+let warnedPrintJobs = false;
+let warnedPrintJob = false;
+
+function getTenantKey(req) {
+  return (
+    req.tenantKey ||
+    req.headers["x-tenant-key"] ||
+    req.headers["x-tenant"] ||
+    req.headers["x-tenant-id"] ||
+    "default"
+  )
+    .toString()
+    .trim()
+    .toLowerCase();
+}
+
 // ===========================
 // POST /api/print-jobs/close-ticket
 // Body: { ticketText: "...." }
 // ===========================
 router.post("/close-ticket", async (req, res) => {
   try {
-    const tenantKey = (
-      req.tenantKey ||
-      req.headers["x-tenant-key"] ||
-      req.headers["x-tenant"] ||
-      req.headers["x-tenant-id"] ||
-      "default"
-    )
-      .toString()
-      .trim()
-      .toLowerCase();
-
+    const tenantKey = getTenantKey(req);
     const { ticketText } = req.body || {};
 
-    // ✅ FIX: YA NO pedimos orderId
-    if (!ticketText) {
-      return res.status(400).json({ error: "ticketText required" });
-    }
+    if (!ticketText) return res.status(400).json({ error: "ticketText required" });
 
     // ======================================================
-    // ✅ ANTI-DUPLICADO (SOLO PARA MODO MESERO)
-    // mismo tenant + mismo ticketText en ventana corta
+    // ✅ ANTI-DUPLICADO (ventana corta)
+    // 1) intenta print_jobs (snake)
+    // 2) si no existe, intenta "PrintJob" (camel)
     // ======================================================
     try {
       const dup = await prisma.$queryRaw`
@@ -44,48 +49,71 @@ router.post("/close-ticket", async (req, res) => {
         ORDER BY id DESC
         LIMIT 1
       `;
-
-      if (Array.isArray(dup) && dup.length > 0) {
-        // ⚠️ Ya existe uno reciente → no reinsertar
-        return res.json({ ok: true, dedup: true });
+      if (Array.isArray(dup) && dup.length > 0) return res.json({ ok: true, dedup: true });
+    } catch (e1) {
+      // si falla porque no existe print_jobs, probamos PrintJob
+      try {
+        const dup2 = await prisma.$queryRaw`
+          SELECT id
+          FROM "PrintJob"
+          WHERE "tenantId" = ${tenantKey}
+            AND type = ${"close_ticket"}
+            AND payload::text = ${JSON.stringify({ ticketText: String(ticketText) })}
+            AND "createdAt" >= NOW() - INTERVAL '10 seconds'
+          ORDER BY id DESC
+          LIMIT 1
+        `;
+        if (Array.isArray(dup2) && dup2.length > 0) return res.json({ ok: true, dedup: true });
+      } catch (e2) {
+        // no rompemos flujo
       }
-    } catch (e) {
-      // si falla dedup, NO rompemos flujo
-      console.warn("⚠️ dedup check failed:", e?.message || e);
     }
 
     // ======================================================
-    // 1) Intento DB real: tabla print_jobs
+    // 1) Intento DB real: print_jobs (snake_case)
     // ======================================================
     try {
       await prisma.$executeRaw`
         INSERT INTO print_jobs (tenant_key, type, ticket_text, status)
-        VALUES (${tenantKey}, ${"close-ticket"}, ${String(ticketText)}, ${"pending"})
+        VALUES (${tenantKey}, ${"close_ticket"}, ${String(ticketText)}, ${"pending"})
       `;
-    } catch (dbErr) {
-      console.warn(
-        "⚠️ print_jobs DB insert failed, usando cola en memoria:",
-        dbErr?.message || dbErr
-      );
+    } catch (dbErr1) {
+      if (!warnedPrintJobs) {
+        warnedPrintJobs = true;
+        console.warn("⚠️ print_jobs insert failed (probando PrintJob / fallback):", dbErr1?.message || dbErr1);
+      }
 
       // ======================================================
-      // 2) Fallback cola memoria (para no romper flujo)
+      // 2) Intento DB alterna: "PrintJob" (CamelCase) usando payload
       // ======================================================
-      PRINT_QUEUE.push({
-        id: Date.now(),
-        tenantKey,
-        type: "close-ticket",
-        ticketText: String(ticketText),
-        status: "pending",
-        createdAt: new Date().toISOString(),
-      });
+      try {
+        await prisma.$executeRaw`
+          INSERT INTO "PrintJob" ("tenantId", type, payload, status)
+          VALUES (${tenantKey}, ${"close_ticket"}, ${JSON.stringify({ ticketText: String(ticketText) })}::jsonb, ${"pending"})
+        `;
+      } catch (dbErr2) {
+        if (!warnedPrintJob) {
+          warnedPrintJob = true;
+          console.warn("⚠️ PrintJob insert failed, usando cola en memoria:", dbErr2?.message || dbErr2);
+        }
+
+        // ======================================================
+        // 3) Fallback cola memoria
+        // ======================================================
+        PRINT_QUEUE.push({
+          id: Date.now(),
+          tenantKey,
+          type: "close_ticket",
+          ticketText: String(ticketText),
+          status: "pending",
+          createdAt: new Date().toISOString(),
+        });
+      }
     }
 
-    // ✅ SIEMPRE OK (no mostrar error al mesero)
     return res.json({ ok: true });
   } catch (e) {
     console.error("❌ close-ticket error:", e);
-    // ✅ no romper mesero
     return res.json({ ok: true });
   }
 });
@@ -96,19 +124,10 @@ router.post("/close-ticket", async (req, res) => {
 // ===========================
 router.get("/next", async (req, res) => {
   try {
-    const tenantKey = (
-      req.tenantKey ||
-      req.headers["x-tenant-key"] ||
-      req.headers["x-tenant"] ||
-      req.headers["x-tenant-id"] ||
-      "default"
-    )
-      .toString()
-      .trim()
-      .toLowerCase();
+    const tenantKey = getTenantKey(req);
 
     // ======================================================
-    // 1) Intento DB real (print_jobs)
+    // 1) Intento DB: print_jobs (snake)
     // ======================================================
     try {
       const rows = await prisma.$queryRaw`
@@ -123,44 +142,57 @@ router.get("/next", async (req, res) => {
       const job = Array.isArray(rows) && rows.length ? rows[0] : null;
 
       if (job?.id) {
-        // marcar como "printed" DE INMEDIATO para no duplicar
         await prisma.$executeRaw`
           UPDATE print_jobs
           SET status = ${"printed"}
           WHERE id = ${job.id}
         `;
 
-        return res.json({
-          job: {
-            id: job.id,
-            ticketText: job.ticket_text,
-          },
-        });
+        return res.json({ job: { id: job.id, ticketText: job.ticket_text } });
       }
-    } catch (dbErr) {
-      console.warn(
-        "⚠️ print_jobs DB next failed, usando cola en memoria:",
-        dbErr?.message || dbErr
-      );
+    } catch (dbErr1) {
+      // print_jobs no existe en este entorno, probamos PrintJob
     }
 
     // ======================================================
-    // 2) Fallback cola memoria
+    // 2) Intento DB alterna: "PrintJob" (CamelCase)
+    // payload trae { ticketText }
     // ======================================================
-    const idx = PRINT_QUEUE.findIndex(
-      (j) => j.tenantKey === tenantKey && j.status === "pending"
-    );
+    try {
+      const rows2 = await prisma.$queryRaw`
+        SELECT id, payload
+        FROM "PrintJob"
+        WHERE "tenantId" = ${tenantKey}
+          AND status = ${"pending"}
+          AND type = ${"close_ticket"}
+        ORDER BY id ASC
+        LIMIT 1
+      `;
 
+      const job2 = Array.isArray(rows2) && rows2.length ? rows2[0] : null;
+
+      if (job2?.id) {
+        await prisma.$executeRaw`
+          UPDATE "PrintJob"
+          SET status = ${"printed"}, "printedAt" = NOW()
+          WHERE id = ${job2.id}
+        `;
+
+        const payload = job2.payload || {};
+        return res.json({ job: { id: job2.id, ticketText: payload.ticketText || "" } });
+      }
+    } catch (dbErr2) {
+      // no rompemos flujo
+    }
+
+    // ======================================================
+    // 3) Fallback cola memoria
+    // ======================================================
+    const idx = PRINT_QUEUE.findIndex((j) => j.tenantKey === tenantKey && j.status === "pending");
     if (idx >= 0) {
       const j = PRINT_QUEUE[idx];
       PRINT_QUEUE.splice(idx, 1);
-
-      return res.json({
-        job: {
-          id: j.id,
-          ticketText: j.ticketText,
-        },
-      });
+      return res.json({ job: { id: j.id, ticketText: j.ticketText } });
     }
 
     return res.json({ job: null });
