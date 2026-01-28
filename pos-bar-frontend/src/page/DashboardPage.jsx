@@ -312,6 +312,20 @@ useEffect(() => {
 }, []);
 
 
+useEffect(() => {
+  try {
+    const tenant = localStorage.getItem("x-tenant") || localStorage.getItem("tenant_key") || "";
+    const saved =
+      (tenant && localStorage.getItem(`qz_printer_v1__${tenant}`)) ||
+      localStorage.getItem("qz_printer_v1") ||
+      localStorage.getItem("qz_printer") ||
+      "";
+
+    if (saved) setPrinterName(saved);
+  } catch {}
+}, []);
+
+
 
 // ✅ 1) Delay dinámico del poll (rápido si hay jobs / lento si no hay)
 const printPollDelayRef = useRef(1500); // ms
@@ -357,12 +371,46 @@ useEffect(() => {
         }, 120000);
       }
 
-      // ✅ imprime directo lo que manda backend
-      if (job.ticketText) {
-        // 🔎 PRUEBA VISUAL (sin impresora)
-        console.log("🖨️ TICKET RECIBIDO DESDE MESERO:");
-        console.log(job.ticketText);
-      }
+      // ✅ imprime REAL lo que manda backend (solo en PC con QZ)
+if (job.ticketText) {
+  try {
+    // usa la MISMA impresora que ya seleccionaste en tu dropdown
+const printerName =
+  
+  localStorage.getItem("pos_printer_name_v1") ||
+  "";
+
+
+    if (!printerName) {
+      console.warn("[QZ] No hay impresora seleccionada en el ADMIN.");
+      return;
+    }
+
+    // 1) Asegura conexión
+    if (!window.qz) return; // por seguridad
+    if (!window.qz.websocket.isActive()) {
+      await window.qz.websocket.connect();
+    }
+
+    // 2) Imprime texto RAW a térmica
+    const config = window.qz.configs.create(printerName, {
+      copies: 1,
+      // si tu térmica usa encoding raro, esto ayuda:
+      // encoding: "CP437",
+    });
+
+    // QZ acepta data como array
+    const printData = [{ type: "raw", format: "plain", data: job.ticketText }];
+await window.qz.print(config, printData);
+
+
+    // ✅ si quieres mantener un log mínimo:
+    console.log("[QZ] Ticket impreso OK:", job.id);
+  } catch (e) {
+    console.warn("[QZ] Error imprimiendo:", e?.message || e);
+  }
+}
+
     } catch (e) {
       console.warn("Print station error:", e?.message || e);
     } finally {
@@ -7964,19 +8012,20 @@ const isCancelled =
     </button>
 
     <select
-      value={printerName}
-    onChange={(e) => {
-  const v = e.target.value;
-  setPrinterName(v);
+  value={printerName}
+  onChange={(e) => {
+    const v = e.target.value;
+    setPrinterName(v);
 
-  // ✅ Guardar selección para que "Confirmar pago" pueda imprimir
-  try {
-    localStorage.setItem("printer_selected", v);
+    try {
+      const tenant = localStorage.getItem("x-tenant") || localStorage.getItem("tenant_key") || "";
+      localStorage.setItem("qz_printer_v1", v);
+      localStorage.setItem("qz_printer", v); // compat
+      if (tenant) localStorage.setItem(`qz_printer_v1__${tenant}`, v);
+    } catch {}
+  }}
 
-    const tenant = localStorage.getItem("x-tenant"); // tu tenant actual
-    if (tenant) localStorage.setItem(`printer_${tenant}`, v);
-  } catch (_) {}
-}}
+
 
       style={{
         padding: "8px 10px",
