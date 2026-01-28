@@ -317,10 +317,12 @@ useEffect(() => {
 useEffect(() => {
   let alive = true;
 
- const tick = async () => {
+const tick = async () => {
   try {
-    // Solo si esta PC tiene QZ (si no, ni intentes)
     if (!window.qz) return;
+
+    if (printPollBusyRef.current) return;
+    printPollBusyRef.current = true;
 
     const base = import.meta.env.VITE_API_URL || "http://localhost:4000";
     const res = await fetch(`${base}/api/print-jobs/next`, {
@@ -332,6 +334,18 @@ useEffect(() => {
     const job = data?.job;
     if (!job) return;
 
+// ✅ si ya procesamos este job.id, lo ignoramos (evita duplicados)
+if (job?.id != null) {
+  const idKey = String(job.id);
+  if (printedJobIdsRef.current.has(idKey)) return;
+  printedJobIdsRef.current.add(idKey);
+  // (opcional) para no crecer infinito, limpia después de 2 min
+  setTimeout(() => {
+    try { printedJobIdsRef.current.delete(idKey); } catch {}
+  }, 120000);
+}
+
+
     // ✅ imprime directo lo que manda backend
 if (job.ticketText) {
   // 🔎 PRUEBA VISUAL (sin impresora)
@@ -341,14 +355,18 @@ if (job.ticketText) {
 
   } catch (e) {
     console.warn("Print station error:", e?.message || e);
+} finally {
+    // ✅ MUY IMPORTANTE
+    printPollBusyRef.current = false;
   }
 };
 
 
 
-  const interval = setInterval(() => {
-    if (alive) tick();
-  }, 1500); // cada 1.5s
+const interval = setInterval(() => {
+  if (alive) tick();
+}, 300);
+
 
   return () => {
     alive = false;
@@ -407,6 +425,10 @@ const [turnoAbierto, setTurnoAbierto] = useState(
 
 
 const printEnqueuedRef = useRef(false);
+// ✅ anti duplicados (ADMIN print polling)
+const printPollBusyRef = useRef(false);          // evita ticks solapados
+const printedJobIdsRef = useRef(new Set());      // evita procesar mismo job.id varias veces
+
 
 
 const [printerName, setPrinterName] = useState(() => {
