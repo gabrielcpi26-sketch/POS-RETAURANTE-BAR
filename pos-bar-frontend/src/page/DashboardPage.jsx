@@ -24,6 +24,10 @@ import { qzListPrinters, qzPrintEscpos } from "../utils/qzPrint";
 
 
 
+
+
+
+
 import {
   Chart as ChartJS,
   BarElement,
@@ -313,39 +317,34 @@ useEffect(() => {
 useEffect(() => {
   let alive = true;
 
-  const tick = async () => {
-    try {
-      // Solo si esta PC tiene QZ (si no, ni intentes)
-      if (!window.qz) return;
+ const tick = async () => {
+  try {
+    // Solo si esta PC tiene QZ (si no, ni intentes)
+    if (!window.qz) return;
 
-      const base = import.meta.env.VITE_API_URL || "http://localhost:4000";
-      const res = await fetch(`${base}/api/print-jobs/next`, {
-        headers: { ...tenantHeaders() },
-      });
-      if (!res.ok) return;
+    const base = import.meta.env.VITE_API_URL || "http://localhost:4000";
+    const res = await fetch(`${base}/api/print-jobs/next`, {
+      headers: { ...tenantHeaders() },
+    });
+    if (!res.ok) return;
 
-      const data = await res.json();
-      const job = data?.job;
-      if (!job) return;
+    const data = await res.json();
+    const job = data?.job;
+    if (!job) return;
 
-      // Aquí ocupas armar el ticket con el orderId
-      // 1) Traes orden:
-      const orderRes = await fetch(`${base}/api/orders/${job.orderId}`, {
-        headers: { ...tenantHeaders() },
-      });
-      if (!orderRes.ok) return;
-      const order = await orderRes.json();
+    // ✅ imprime directo lo que manda backend
+if (job.ticketText) {
+  // 🔎 PRUEBA VISUAL (sin impresora)
+  console.log("🖨️ TICKET RECIBIDO DESDE MESERO:");
+  console.log(job.ticketText);
+}
 
-      // 2) armas tu ticketPayload como ya lo haces hoy
-      const ticketPayload = buildTicketPayloadFromOrder(order, job.paymentMethod);
+  } catch (e) {
+    console.warn("Print station error:", e?.message || e);
+  }
+};
 
-      // 3) imprimes local con QZ
-      await qzPrint(ticketPayload);
-    } catch (e) {
-      // silencioso
-      console.warn("Print station error:", e);
-    }
-  };
+
 
   const interval = setInterval(() => {
     if (alive) tick();
@@ -3652,7 +3651,8 @@ if (isMesero) {
   body: JSON.stringify({ ticketText }),
 });
 
-printEnqueued = true;
+printEnqueuedRef.current = true; // ✅
+
 
     } catch (err) {
       console.warn("enqueue print failed (mesero):", err);
