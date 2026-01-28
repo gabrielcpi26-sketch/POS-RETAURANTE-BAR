@@ -313,68 +313,80 @@ useEffect(() => {
 
 
 
+// ✅ 1) Delay dinámico del poll (rápido si hay jobs / lento si no hay)
+const printPollDelayRef = useRef(1500); // ms
 
 useEffect(() => {
   let alive = true;
 
-const tick = async () => {
-  try {
-    if (!window.qz) return;
+  const tick = async () => {
+    try {
+      if (!window.qz) return;
 
-    if (printPollBusyRef.current) return;
-    printPollBusyRef.current = true;
+      if (printPollBusyRef.current) return;
+      printPollBusyRef.current = true;
 
-    const base = import.meta.env.VITE_API_URL || "http://localhost:4000";
-    const res = await fetch(`${base}/api/print-jobs/next`, {
-      headers: { ...tenantHeaders() },
-    });
-    if (!res.ok) return;
+      const base = import.meta.env.VITE_API_URL || "http://localhost:4000";
+      const res = await fetch(`${base}/api/print-jobs/next`, {
+        headers: { ...tenantHeaders() },
+      });
+      if (!res.ok) return;
 
-    const data = await res.json();
-    const job = data?.job;
-    if (!job) return;
+      const data = await res.json();
+      const job = data?.job;
 
-// ✅ si ya procesamos este job.id, lo ignoramos (evita duplicados)
-if (job?.id != null) {
-  const idKey = String(job.id);
-  if (printedJobIdsRef.current.has(idKey)) return;
-  printedJobIdsRef.current.add(idKey);
-  // (opcional) para no crecer infinito, limpia después de 2 min
-  setTimeout(() => {
-    try { printedJobIdsRef.current.delete(idKey); } catch {}
-  }, 120000);
-}
+      if (!job) {
+        // ⏳ no hay nada que imprimir → baja frecuencia
+        printPollDelayRef.current = 5000; // 5s
+        return;
+      }
 
+      // 🎯 sí hay job → acelera
+      printPollDelayRef.current = 1000;
 
-    // ✅ imprime directo lo que manda backend
-if (job.ticketText) {
-  // 🔎 PRUEBA VISUAL (sin impresora)
-  console.log("🖨️ TICKET RECIBIDO DESDE MESERO:");
-  console.log(job.ticketText);
-}
+      // ✅ si ya procesamos este job.id, lo ignoramos (evita duplicados)
+      if (job?.id != null) {
+        const idKey = String(job.id);
+        if (printedJobIdsRef.current.has(idKey)) return;
+        printedJobIdsRef.current.add(idKey);
+        // (opcional) para no crecer infinito, limpia después de 2 min
+        setTimeout(() => {
+          try {
+            printedJobIdsRef.current.delete(idKey);
+          } catch {}
+        }, 120000);
+      }
 
-  } catch (e) {
-    console.warn("Print station error:", e?.message || e);
-} finally {
-    // ✅ MUY IMPORTANTE
-    printPollBusyRef.current = false;
-  }
-};
+      // ✅ imprime directo lo que manda backend
+      if (job.ticketText) {
+        // 🔎 PRUEBA VISUAL (sin impresora)
+        console.log("🖨️ TICKET RECIBIDO DESDE MESERO:");
+        console.log(job.ticketText);
+      }
+    } catch (e) {
+      console.warn("Print station error:", e?.message || e);
+    } finally {
+      // ✅ MUY IMPORTANTE
+      printPollBusyRef.current = false;
+    }
+  };
 
+  // ✅ 2) loop con setTimeout (evita que se encimen ticks)
+  let timeoutId;
 
+  const loop = async () => {
+    if (!alive) return;
+    await tick();
+    timeoutId = setTimeout(loop, printPollDelayRef.current);
+  };
 
-const interval = setInterval(() => {
-  if (alive) tick();
-}, 300);
-
+  loop();
 
   return () => {
     alive = false;
-    clearInterval(interval);
+    clearTimeout(timeoutId);
   };
 }, []);
-
-
 
 // ======================
 // RESUMEN DUEÑO + PEDIDOS
@@ -3664,14 +3676,15 @@ if (isMesero) {
     try {
       const base = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
-   await fetch(`${base}/api/print-jobs/close-ticket`, {
+  fetch(`${base}/api/print-jobs/close-ticket`, {
   method: "POST",
   headers: {
     "Content-Type": "application/json",
     ...tenantHeaders(),
   },
   body: JSON.stringify({ ticketText }),
-});
+}).catch(() => {});
+
 
 printEnqueuedRef.current = true; // ✅
 
@@ -3716,20 +3729,27 @@ function buildTicketText({ table, items, paymentMethod, paymentRef, total, tenan
     tenantConfig?.legalName ||
     "";
 
-  const negocioTel =
-    tenantConfig?.telefono ||
-    tenantConfig?.phone ||
-    "";
+const negocioTel =
+  tenantConfig?.telefono ||
+  tenantConfig?.phone ||
+  getBusinessFieldFromStorage(tenantKey, "telefono") ||
+  getBusinessFieldFromStorage(tenantKey, "phone") ||
+  "";
 
-  const negocioDir =
-    tenantConfig?.direccion ||
-    tenantConfig?.address ||
-    "";
+const negocioDir =
+  tenantConfig?.direccion ||
+  tenantConfig?.address ||
+  getBusinessFieldFromStorage(tenantKey, "direccion") ||
+  getBusinessFieldFromStorage(tenantKey, "address") ||
+  "";
 
-  const negocioRFC =
-    tenantConfig?.rfc ||
-    tenantConfig?.taxId ||
-    "";
+const negocioRFC =
+  tenantConfig?.rfc ||
+  tenantConfig?.taxId ||
+  getBusinessFieldFromStorage(tenantKey, "rfc") ||
+  getBusinessFieldFromStorage(tenantKey, "taxId") ||
+  "";
+
 
   const lines = [];
   lines.push("====================");
@@ -3772,6 +3792,32 @@ function buildTicketText({ table, items, paymentMethod, paymentRef, total, tenan
   lines.push("\n\n"); // feed para que corte en térmica
   return lines.join("\n");
 };
+
+
+const getBusinessFieldFromStorage = (tenantKey, field) => {
+  const t = String(tenantKey || "").trim();
+  const f = String(field || "").trim();
+  if (!t || !f) return "";
+
+  // 1) exacto
+  let v =
+    localStorage.getItem(`pos_business_${f}_v1__${t}`) ||
+    localStorage.getItem(`pos_business_${f}_v1_${t}`);
+
+  // 2) fallback guiones/underscores
+  if (!v && t) {
+    const tDash = t.replace(/_/g, "-");
+    const tUnd = t.replace(/-/g, "_");
+    v =
+      localStorage.getItem(`pos_business_${f}_v1__${tDash}`) ||
+      localStorage.getItem(`pos_business_${f}_v1_${tDash}`) ||
+      localStorage.getItem(`pos_business_${f}_v1__${tUnd}`) ||
+      localStorage.getItem(`pos_business_${f}_v1_${tUnd}`);
+  }
+
+  return v || "";
+};
+
 
 const getBusinessNameFromStorage = (tenantKey) => {
   const t = String(tenantKey || "").trim();
@@ -3872,7 +3918,8 @@ total: currentOrder.items?.reduce(
 try {
   const base = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
-  await fetch(`${base}/api/print-jobs/close-ticket`, {
+  fetch(`${base}/api/print-jobs/close-ticket`, {
+
     method: "POST",
     headers: {
       "Content-Type": "application/json",
