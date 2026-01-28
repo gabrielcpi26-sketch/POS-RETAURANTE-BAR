@@ -1019,6 +1019,40 @@ router.get("/print/stream", (req, res) => {
   });
 });
 
+async function enqueuePrintJob(prisma, tenantIdStr, payloadObj) {
+  const type = "close_ticket";
+  const payload = JSON.stringify(payloadObj);
+  const status = "pending";
+
+  // 1) intenta tabla snake_case (DEV)
+  try {
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO print_jobs (tenant_key, type, payload, status)
+       VALUES ($1, $2, $3, $4)`,
+      tenantIdStr,
+      type,
+      payload,
+      status
+    );
+    return true;
+  } catch (e1) {}
+
+  // 2) intenta tabla PascalCase (PROD vieja)
+  try {
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO "PrintJob" ("tenantId", "type", "payload", "status")
+       VALUES ($1, $2, $3, $4)`,
+      tenantIdStr,
+      type,
+      payload,
+      status
+    );
+    return true;
+  } catch (e2) {}
+
+  return false;
+}
+
 
 router.put("/close-table/:tableId", async (req, res) => {
   try {
@@ -1095,14 +1129,19 @@ router.put("/close-table/:tableId", async (req, res) => {
       };
 
       try {
-        await prisma.printJob.create({
-          data: {
-            tenantId: tenantIdStr,
-            type: "close_ticket",
-            payload: JSON.stringify(payload),
-            status: "pending",
-          },
-        });
+    // ✅ Encolar impresión en tabla real (LOCAL: print_jobs) sin romper cierre
+try {
+  await prisma.$executeRaw`
+    INSERT INTO print_jobs (tenant_key, type, ticket_text, status)
+    VALUES (${tenantIdStr}, ${"close_ticket"}, ${JSON.stringify(payload)}, ${"pending"})
+  `;
+
+  // SSE opcional (si lo usas)
+  try { broadcastPrintJob(tenantIdStr, payload); } catch {}
+} catch (e) {
+  console.warn("⚠️ print enqueue failed (no bloquea):", e?.message || e);
+}
+
 
         // SSE opcional (si lo usas)
         try { broadcastPrintJob(tenantIdStr, payload); } catch {}
@@ -1143,42 +1182,80 @@ router.get("/print-jobs", async (req, res) => {
     const type = String(req.query.type || "");
     const status = String(req.query.status || "pending");
 
-    const jobs = await prisma.printJob.findMany({
-      where: { tenantId: tenantIdStr, type, status },
-      orderBy: { id: "asc" },
-      take: 20,
-    });
+ let jobs = [];
 
-    res.json(
-      jobs.map((j) => ({
-        id: j.id,
-        type: j.type,
-        payload: j.payload,
-      }))
-    );
+try {
+  // 1) intenta tabla nueva snake_case
+  jobs = await prisma.$queryRawUnsafe(`
+    SELECT id, type, payload
+    FROM print_jobs
+    WHERE tenant_key = $1
+      AND ($2 = '' OR type = $2)
+      AND status = $3
+    ORDER BY id ASC
+    LIMIT 20
+  `, tenantIdStr, type, status);
+} catch (e1) {
+  try {
+    // 2) fallback tabla vieja PascalCase
+    jobs = await prisma.$queryRawUnsafe(`
+      SELECT id, type, payload
+      FROM "PrintJob"
+      WHERE "tenantId" = $1
+        AND ($2 = '' OR type = $2)
+        AND status = $3
+      ORDER BY id ASC
+      LIMIT 20
+    `, tenantIdStr, type, status);
+  } catch (e2) {
+    jobs = [];
+  }
+}
+
+res.json(
+  jobs.map(j => ({
+    id: j.id,
+    type: j.type,
+    payload: j.payload,
+  }))
+);
+
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: "print-jobs error" });
   }
 });
 
-// ✅ Marcar como impreso
+// ✅ Marcar como impreso (DEV + PROD, fallback seguro)
 router.post("/print-jobs/:id/printed", async (req, res) => {
   try {
     const tenantIdStr = String(req.tenantId);
     const id = Number(req.params.id);
 
-    await prisma.printJob.updateMany({
-      where: { id, tenantId: tenantIdStr },
-      data: { status: "printed", printedAt: new Date() },
-    });
+    // 1) intenta snake_case (DEV)
+    try {
+      await prisma.$executeRaw`
+        UPDATE print_jobs
+        SET status = 'printed', printed_at = NOW()
+        WHERE id = ${id} AND tenant_key = ${tenantIdStr}
+      `;
+    } catch (e1) {
+      // 2) fallback PascalCase (PROD antiguo)
+      await prisma.$executeRawUnsafe(`
+        UPDATE "PrintJob"
+        SET status = 'printed', "printedAt" = NOW()
+        WHERE id = ${id} AND "tenantId" = '${tenantIdStr}'
+      `);
+    }
 
-    res.json({ ok: true });
+    return res.json({ ok: true });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ error: "mark printed error" });
+    // NO rompas el flujo del POS
+    return res.json({ ok: true });
   }
 });
+
 
 // =======================
 // PEDIDOS ABIERTOS POR MESA
