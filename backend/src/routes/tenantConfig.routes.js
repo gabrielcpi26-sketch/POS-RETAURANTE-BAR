@@ -20,9 +20,22 @@ router.get("/", async (req, res) => {
       ? { tenant_id: Number(tenantKey) }
       : { business_name: tenantKey.toLowerCase() };
 
-    const cfg = await prisma.tenant_config.findFirst({
-      where: whereCfg,
-    });
+    const cfgRows = /^\d+$/.test(tenantKey)
+  ? await prisma.$queryRaw`
+      select admin_pin, mesero_pin, business_name, direccion, telefono, rfc, razon_social
+      from tenant_config
+      where tenant_id = ${Number(tenantKey)}
+      limit 1
+    `
+  : await prisma.$queryRaw`
+      select admin_pin, mesero_pin, business_name, direccion, telefono, rfc, razon_social
+      from tenant_config
+      where lower(business_name) = ${tenantKey.toLowerCase()}
+      limit 1
+    `;
+
+const cfg = Array.isArray(cfgRows) && cfgRows.length ? cfgRows[0] : null;
+
 
     if (!cfg) {
       return res.json({
