@@ -20,19 +20,21 @@ router.get("/", async (req, res) => {
       ? { tenant_id: Number(tenantKey) }
       : { business_name: tenantKey.toLowerCase() };
 
-    const cfgRows = /^\d+$/.test(tenantKey)
+const cfgRows = /^\d+$/.test(String(tenantKey))
   ? await prisma.$queryRaw`
-     select admin_pin, mesero_pin, business_name, display_name, direccion, telefono, rfc, razon_social
-from tenant_config
-where lower(business_name) = ${tenantKey.toLowerCase()}
-limit 1
+      select admin_pin, mesero_pin, business_name, display_name, direccion, telefono, rfc, razon_social
+      from tenant_config
+      where tenant_id = ${Number(tenantKey)}
+      limit 1
     `
   : await prisma.$queryRaw`
-      select admin_pin, mesero_pin, business_name, direccion, telefono, rfc, razon_social
+      select admin_pin, mesero_pin, business_name, display_name, direccion, telefono, rfc, razon_social
       from tenant_config
-      where lower(business_name) = ${tenantKey.toLowerCase()}
+      where lower(business_name) = ${String(tenantKey).toLowerCase()}
       limit 1
     `;
+
+
 
 const cfg = Array.isArray(cfgRows) && cfgRows.length ? cfgRows[0] : null;
 
@@ -52,12 +54,14 @@ const cfg = Array.isArray(cfgRows) && cfgRows.length ? cfgRows[0] : null;
    return res.json({
   adminPin: cfg.admin_pin ?? null,
   meseroPin: cfg.mesero_pin ?? null,
-  businessName: (cfg.display_name ?? cfg.business_name) ?? null,
+  businessName: cfg.display_name ?? cfg.business_name ?? null,
+
   direccion: cfg.direccion ?? null,
   telefono: cfg.telefono ?? null,
   rfc: cfg.rfc ?? null,
   razonSocial: cfg.razon_social ?? null,
 });
+
   } catch (e) {
     console.error("tenant-config error:", e);
     return res.json({
