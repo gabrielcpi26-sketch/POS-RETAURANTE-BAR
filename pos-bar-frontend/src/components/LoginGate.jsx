@@ -249,17 +249,28 @@ const [loadingTenantConfig, setLoadingTenantConfig] = useState(() => {
     setLogo(null);
   };
 
-  const businessName = useMemo(() => {
-    try {
-      return (
-        String(tenantConfig?.businessName ?? "").trim() ||
-        localStorage.getItem(LS_BIZ_NAME_T) ||
-        "El Tridente"
-      );
-    } catch {
-      return String(tenantConfig?.businessName ?? "").trim() || "El Tridente";
-    }
-  }, [tenantConfig, LS_BIZ_NAME_T]);
+ const businessName = useMemo(() => {
+  try {
+    return (
+      String(
+        tenantConfig?.displayName ??
+        tenantConfig?.businessName ??
+        ""
+      ).trim() ||
+      localStorage.getItem(LS_BIZ_NAME_T) ||
+      "El Tridente"
+    );
+  } catch {
+    return (
+      String(
+        tenantConfig?.displayName ??
+        tenantConfig?.businessName ??
+        ""
+      ).trim() || "El Tridente"
+    );
+  }
+}, [tenantConfig, LS_BIZ_NAME_T]);
+
 
   const subtitle = "Control de operación • mesas • ventas • inventario";
   const modeLabel = role === "admin" ? "Administrador" : "Empleado";
