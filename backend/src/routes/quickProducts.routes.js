@@ -10,7 +10,12 @@ router.get("/", async (req, res) => {
   try {
     const tenantId = req.tenantId; // viene de tu middleware en server.js
 
-    // ✅ LEER items DIRECTO (tu tabla ya tiene columna items)
+    // ✅ NO ROMPER UI: si NO hay tenantId, NO tocamos DB y regresamos vacío
+    if (!tenantId) {
+      console.warn("⚠️ quick-products GET: tenantId missing (skipping DB)");
+      return res.json({ items: [] });
+    }
+
     const rows = await prisma.$queryRaw`
       select items
       from public.quick_menu_config
@@ -18,7 +23,6 @@ router.get("/", async (req, res) => {
       limit 1
     `;
 
-    // ✅ SI NO EXISTE FILA, CREARLA VACÍA (persistencia)
     if (!rows || rows.length === 0) {
       await prisma.$executeRaw`
         insert into public.quick_menu_config (tenant_id, items)
@@ -28,7 +32,7 @@ router.get("/", async (req, res) => {
       return res.json({ items: [] });
     }
 
-    const items = rows?.[0]?.items || [];
+    const items = Array.isArray(rows?.[0]?.items) ? rows[0].items : [];
     return res.json({ items });
   } catch (e) {
     console.error("❌ quick-products GET error:", e);
@@ -40,9 +44,15 @@ router.get("/", async (req, res) => {
 router.put("/", async (req, res) => {
   try {
     const tenantId = req.tenantId;
+
+    // ✅ NO ROMPER UI: si NO hay tenantId, NO tocamos DB y regresamos ok
+    if (!tenantId) {
+      console.warn("⚠️ quick-products PUT: tenantId missing (skipping DB)");
+      return res.json({ ok: true, skipped: true });
+    }
+
     const items = Array.isArray(req.body?.items) ? req.body.items : [];
 
-    // upsert (requiere UNIQUE en tenant_id)
     await prisma.$executeRaw`
       insert into public.quick_menu_config (tenant_id, items)
       values (${tenantId}, ${JSON.stringify(items)}::jsonb)
@@ -60,3 +70,4 @@ router.put("/", async (req, res) => {
 });
 
 module.exports = router;
+
