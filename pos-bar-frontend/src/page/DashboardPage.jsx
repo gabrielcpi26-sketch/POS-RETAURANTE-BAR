@@ -176,12 +176,12 @@ function loadStoredProducts() {
       localStorage.getItem(QUICK_KEY) ||
       localStorage.getItem("pos_quick_products");
 
-    if (!raw) return DEFAULT_PRODUCTS;
+    if (!raw) return [];
     const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed) || parsed.length === 0) return DEFAULT_PRODUCTS;
+    if (!Array.isArray(parsed)) return [];
     return parsed;
   } catch {
-    return DEFAULT_PRODUCTS;
+   return parsed;
   }
 }
 
