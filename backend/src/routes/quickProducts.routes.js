@@ -44,6 +44,8 @@ router.get("/", async (req, res) => {
 });
 
 // PUT: guardar (upsert) por tenant (items + config)
+// ✅ FIX MINIMO: NUNCA insertar config NULL (usa '{}'::jsonb por default)
+// ✅ Si no mandas config, NO lo borra (COALESCE conserva lo existente)
 router.put("/", async (req, res) => {
   try {
     const tenantId = req.tenantId;
@@ -55,19 +57,25 @@ router.put("/", async (req, res) => {
     }
 
     const items = Array.isArray(req.body?.items) ? req.body.items : [];
-    const config = req.body?.config ?? null;
+
+    // OJO: distinguir entre "no viene config" vs "viene config vacío"
+    const configProvided = Object.prototype.hasOwnProperty.call(req.body || {}, "config");
+    const configObj = configProvided ? (req.body.config ?? {}) : null; // null => conservar
+
+    // Si configObj es null -> mandamos NULL y SQL lo convierte a '{}' SOLO para INSERT
+    const configJson = configObj === null ? null : JSON.stringify(configObj);
 
     await prisma.$executeRaw`
       insert into public.quick_menu_config (tenant_id, items, config)
       values (
         ${tenantId},
         ${JSON.stringify(items)}::jsonb,
-        ${config ? JSON.stringify(config) : null}::jsonb
+        coalesce(${configJson}::jsonb, '{}'::jsonb)
       )
       on conflict (tenant_id)
       do update set
         items = excluded.items,
-        config = coalesce(excluded.config, public.quick_menu_config.config),
+        config = coalesce(${configJson}::jsonb, public.quick_menu_config.config),
         updated_at = now()
     `;
 
