@@ -1307,7 +1307,8 @@ const SECTIONS_KEY = `pos_menu_sections_v1_${tenantKey}`;
 // =======================
 const [quickProducts, setQuickProducts] = useState(() => {
   const raw = localStorage.getItem(QUICK_KEY);
-  return raw ? JSON.parse(raw) : DEFAULT_PRODUCTS;
+  return raw ? JSON.parse(raw) : [];
+
 });
 
 const quickHydratedRef = useRef(false);
@@ -1330,16 +1331,16 @@ useEffect(() => {
 
       if (!res.ok) return; // no rompas nada: si falla, te quedas con localStorage/default
 
-      const data = await res.json();
-      const items = Array.isArray(data?.items) ? data.items : [];
+const data = await res.json();
+const items = Array.isArray(data?.items) ? data.items : [];
 
-      if (!alive) return;
+if (!alive) return;
 
-      // ✅ NO pises tu menú local si el backend viene vacío
-      if (Array.isArray(items) && items.length > 0) {
-        setQuickProducts(items);
-        localStorage.setItem(QUICK_KEY, JSON.stringify(items));
-      }
+// ✅ AHORA: vacío [] es válido y debe pisar para NO revivir defaults
+setQuickProducts(items);
+localStorage.setItem(QUICK_KEY, JSON.stringify(items));
+
+
     } catch {
       // silencioso para no romper
     } finally {
@@ -1389,12 +1390,13 @@ useEffect(() => {
   const hydrate = async () => {
     // A) Fallback inmediato desde localStorage (para no dejar la UI vacía)
     try {
-      const raw = localStorage.getItem(QUICK_KEY);
-      if (raw && !cancelled) setQuickProducts(JSON.parse(raw));
-      if (!raw && !cancelled) setQuickProducts(DEFAULT_PRODUCTS);
-    } catch {
-      if (!cancelled) setQuickProducts(DEFAULT_PRODUCTS);
-    }
+if (raw && !cancelled) setQuickProducts(JSON.parse(raw));
+if (!raw && !cancelled) setQuickProducts([]);
+} catch {
+  if (!cancelled) setQuickProducts([]);
+}
+
+
 
     // B) Fuente real: backend (Supabase vía Prisma)
     try {
