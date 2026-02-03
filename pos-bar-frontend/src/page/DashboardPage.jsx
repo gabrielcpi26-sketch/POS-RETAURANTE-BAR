@@ -1334,14 +1334,20 @@ useEffect(() => {
 const data = await res.json();
 const items = Array.isArray(data?.items) ? data.items : [];
 
+// ✅ hidratar secciones desde backend (config), NO desde items
+if (Array.isArray(data?.config?.menuSections)) {
+  setMenuSections(data.config.menuSections);
+  localStorage.setItem(SECTIONS_KEY, JSON.stringify(data.config.menuSections));
+}
+
+
 if (!alive) return;
 
 // ✅ AHORA: vacío [] es válido y debe pisar para NO revivir defaults
 setQuickProducts(items);
 localStorage.setItem(QUICK_KEY, JSON.stringify(items));
 
-
-    } catch {
+  } catch {
       // silencioso para no romper
     } finally {
       // ya hidrato (aunque haya caído en fallback)
@@ -1506,6 +1512,30 @@ const [recipeOptions, setRecipeOptions] = useState([]);
 
 
 
+// ==============================
+// FIX: guardar secciones de menú
+// ==============================
+const saveMenuSections = async (sections) => {
+  try {
+    const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
+
+    await fetch(`${API}/api/quick-products`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        ...tenantHeaders(),
+      },
+      body: JSON.stringify({
+        config: { menuSections: sections },
+      }),
+    });
+
+    localStorage.setItem(SECTIONS_KEY, JSON.stringify(sections));
+    setMenuSections(sections);
+  } catch (e) {
+    console.error("saveMenuSections failed:", e);
+  }
+};
 
 
 
