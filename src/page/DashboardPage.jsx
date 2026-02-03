@@ -28,6 +28,7 @@ ChartJS.register(BarElement, CategoryScale, LinearScale, Tooltip, Legend, ArcEle
 
 
 
+
 // =======================
 // =========================
 // CONFIG
@@ -130,12 +131,12 @@ const PROMO_MAPPINGS = {
 function loadStoredProducts() {
   try {
     const raw = localStorage.getItem("pos_quick_products");
-    if (!raw) return DEFAULT_PRODUCTS;
+    if (!raw) return [];
     const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed) || parsed.length === 0) return DEFAULT_PRODUCTS;
+    if (!Array.isArray(parsed)) return [];
     return parsed;
   } catch {
-    return DEFAULT_PRODUCTS;
+    return parsed;
   }
 }
 
@@ -153,7 +154,7 @@ function getAutoRange(days = 7) {
 
 
 // =======================
-// ROLES
+// ROLE
 // =======================
 const ROLES = {
   MESERO: "mesero",
@@ -2270,7 +2271,12 @@ if (!isTurnoAbierto()) {
                 `${API_URL}/api/orders/close-table/${selectedTable.id}`,
                 {
                   method: "PUT",
-                  headers: { "Content-Type": "application/json" },
+                  headers: {
+  "Content-Type": "application/json",
+  "x-tenant": tenantKey,   // ✅ el que ya usas en todo el POS
+  "x-device": "mesero",    // ✅ ACTIVA impresión / alerta
+},
+
                   body: JSON.stringify({
                     paymentMethod: closePaymentMethod,
                     paymentRef:
