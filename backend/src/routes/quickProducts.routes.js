@@ -10,18 +10,26 @@ router.get("/", async (req, res) => {
   try {
     const tenantId = req.tenantId; // viene de tu middleware en server.js
 
-const rows = await prisma.$queryRaw`
-  select config
-  from public.quick_menu_config
-  where tenant_id = ${tenantId}
-  limit 1
-`;
+    // ✅ LEER items DIRECTO (tu tabla ya tiene columna items)
+    const rows = await prisma.$queryRaw`
+      select items
+      from public.quick_menu_config
+      where tenant_id = ${tenantId}
+      limit 1
+    `;
 
-const items = rows?.[0]?.config?.items || [];
+    // ✅ SI NO EXISTE FILA, CREARLA VACÍA (persistencia)
+    if (!rows || rows.length === 0) {
+      await prisma.$executeRaw`
+        insert into public.quick_menu_config (tenant_id, items)
+        values (${tenantId}, '[]'::jsonb)
+        on conflict (tenant_id) do nothing
+      `;
+      return res.json({ items: [] });
+    }
 
-return res.json({ items });
-
-
+    const items = rows?.[0]?.items || [];
+    return res.json({ items });
   } catch (e) {
     console.error("❌ quick-products GET error:", e);
     return res.status(500).json({ error: "quick-products GET failed" });
@@ -34,7 +42,7 @@ router.put("/", async (req, res) => {
     const tenantId = req.tenantId;
     const items = Array.isArray(req.body?.items) ? req.body.items : [];
 
-    // upsert (requiere UNIQUE en tenant_id, ver SQL abajo)
+    // upsert (requiere UNIQUE en tenant_id)
     await prisma.$executeRaw`
       insert into public.quick_menu_config (tenant_id, items)
       values (${tenantId}, ${JSON.stringify(items)}::jsonb)
