@@ -1519,16 +1519,19 @@ const saveMenuSections = async (sections) => {
   try {
     const API = import.meta.env.VITE_API_URL || "http://localhost:4000";
 
-    await fetch(`${API}/api/quick-products`, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        ...tenantHeaders(),
-      },
-      body: JSON.stringify({
-        config: { menuSections: sections },
-      }),
-    });
+  await fetch(`${API}/api/quick-products`, {
+  method: "PUT",
+  headers: {
+    "Content-Type": "application/json",
+    ...tenantHeaders(), // ⬅️ ESTA ES LA CLAVE
+  },
+  body: JSON.stringify({
+    config: { menuSections: sections },
+  }),
+});
+
+
+
 
     localStorage.setItem(SECTIONS_KEY, JSON.stringify(sections));
     setMenuSections(sections);
