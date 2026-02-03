@@ -131,12 +131,11 @@ const PROMO_MAPPINGS = {
 function loadStoredProducts() {
   try {
     const raw = localStorage.getItem("pos_quick_products");
-    if (!raw) return [];
+    if (!raw) return [];            // ⬅️ vacío real
     const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed;
+    return Array.isArray(parsed) ? parsed : [];
   } catch {
-    return parsed;
+    return [];                      // ⬅️ NUNCA defaults
   }
 }
 
