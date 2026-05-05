@@ -19,13 +19,23 @@ async function getTenantId(req) {
     .trim()
     .toLowerCase();
 
-  const tenant = await prisma.tenant.upsert({
-    where: { key: tenantKey },
-    update: {},
-    create: { key: tenantKey, name: tenantKey },
+// FIX mínimo: si viene "laguarida", usar el tenant real existente id 2
+if (tenantKey === "laguarida" || tenantKey === "la guarida") {
+  const realTenant = await prisma.tenant.findFirst({
+    where: { id: 2 },
+    select: { id: true },
   });
 
-  return tenant.id;
+  if (realTenant) return realTenant.id;
+}
+
+const tenant = await prisma.tenant.upsert({
+  where: { key: tenantKey },
+  update: {},
+  create: { key: tenantKey, name: tenantKey },
+});
+
+return tenant.id;
 }
 
 // Helper: para que tu UI siga mostrando "stock" aunque en DB sea currentStock
